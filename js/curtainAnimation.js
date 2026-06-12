@@ -21,6 +21,12 @@ export class CurtainAnimation {
     this.loaded = false;
     this.playing = false;
     this.lastFrameIndex = -1;
+    this._sequenceToken = 0;
+  }
+
+  _cancelSequence() {
+    this._sequenceToken += 1;
+    this.playing = false;
   }
 
   resize() {
@@ -40,6 +46,7 @@ export class CurtainAnimation {
 
   /** @param {HTMLImageElement} img */
   drawFrame(img) {
+    if (!this.ctx || !img?.naturalWidth || !img?.naturalHeight) return;
     const w = this.mount.clientWidth;
     const h = this.mount.clientHeight;
     if (w <= 0 || h <= 0) return;
@@ -81,10 +88,74 @@ export class CurtainAnimation {
   }
 
   /** 等待布局完成，避免开场时 mount 尺寸为 0 导致 Canvas 无法绘制 */
-  _waitLayout() {
+  async _waitLayout() {
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+      if (this.mount.clientWidth > 0 && this.mount.clientHeight > 0) return;
+    }
+  }
+
+  /**
+   * 用 setTimeout 推进帧序，避免主循环占用 rAF 时落幕动画卡住。
+   * @param {(elapsed: number) => number} frameIndexForElapsed
+   * @param {{ playAudio?: boolean }} [opts]
+   * @returns {Promise<number>}
+   */
+  _runFrameSequence(frameIndexForElapsed, opts = {}) {
+    const totalMs = this.frames.length * FRAME_MS;
+    const start = performance.now();
+    const token = this._sequenceToken + 1;
+    this._sequenceToken = token;
+
+    if (opts.playAudio) {
+      this.audio.currentTime = 0;
+      this.audio.play().catch(() => {});
+    }
+
     return new Promise((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(resolve));
+      const step = () => {
+        if (token !== this._sequenceToken) {
+          resolve(token);
+          return;
+        }
+        const elapsed = performance.now() - start;
+        const index = frameIndexForElapsed(elapsed);
+        if (
+          index >= 0 &&
+          index < this.frames.length &&
+          index !== this.lastFrameIndex &&
+          this.frames[index]
+        ) {
+          this.lastFrameIndex = index;
+          this.drawFrame(this.frames[index]);
+        }
+        if (elapsed < totalMs) {
+          setTimeout(step, 16);
+          return;
+        }
+        const finalIndex = frameIndexForElapsed(totalMs);
+        if (
+          finalIndex >= 0 &&
+          finalIndex < this.frames.length &&
+          this.frames[finalIndex]
+        ) {
+          this.lastFrameIndex = finalIndex;
+          this.drawFrame(this.frames[finalIndex]);
+        }
+        resolve(token);
+      };
+      step();
     });
+  }
+
+  _beginPlayback() {
+    this.mount.hidden = false;
+    this.mount.setAttribute("aria-hidden", "false");
+    this.mount.classList.remove("curtain-done", "curtain-closed");
+    this.mount.classList.add("curtain-playing");
+    this.canvas.hidden = false;
   }
 
   /** @returns {Promise<void>} */
@@ -98,11 +169,7 @@ export class CurtainAnimation {
 
     this.playing = true;
     try {
-      this.mount.hidden = false;
-      this.mount.setAttribute("aria-hidden", "false");
-      this.mount.classList.remove("curtain-done");
-      this.mount.classList.add("curtain-playing");
-      this.canvas.hidden = false;
+      this._beginPlayback();
       this.lastFrameIndex = -1;
 
       await this._waitLayout();
@@ -112,32 +179,12 @@ export class CurtainAnimation {
         this.drawFrame(this.frames[0]);
       }
 
-      this.audio.currentTime = 0;
-      const audioPromise = this.audio.play().catch(() => {});
-      const totalMs = this.frames.length * FRAME_MS;
-      const start = performance.now();
-
-      await new Promise((resolve) => {
-        const tick = (now) => {
-          const elapsed = now - start;
-          const index = Math.min(
-            Math.floor(elapsed / FRAME_MS),
-            this.frames.length - 1
-          );
-          if (index !== this.lastFrameIndex) {
-            this.lastFrameIndex = index;
-            this.drawFrame(this.frames[index]);
-          }
-          if (elapsed < totalMs) {
-            requestAnimationFrame(tick);
-          } else {
-            resolve(undefined);
-          }
-        };
-        requestAnimationFrame(tick);
-      });
-
-      await audioPromise;
+      const token = await this._runFrameSequence(
+        (elapsed) =>
+          Math.min(Math.floor(elapsed / FRAME_MS), this.frames.length - 1),
+        { playAudio: true }
+      );
+      if (token !== this._sequenceToken) return;
 
       this.mount.classList.remove("curtain-playing");
       this.mount.classList.add("curtain-done");
@@ -172,11 +219,7 @@ export class CurtainAnimation {
 
     this.playing = true;
     try {
-      this.mount.hidden = false;
-      this.mount.setAttribute("aria-hidden", "false");
-      this.mount.classList.remove("curtain-done");
-      this.mount.classList.add("curtain-playing");
-      this.canvas.hidden = false;
+      this._beginPlayback();
       this.lastFrameIndex = -1;
 
       await this._waitLayout();
@@ -187,31 +230,21 @@ export class CurtainAnimation {
         this.drawFrame(firstClose);
       }
 
-      const totalMs = this.frames.length * FRAME_MS;
-      const start = performance.now();
-
-      await new Promise((resolve) => {
-        const tick = (now) => {
-          const elapsed = now - start;
-          const forwardIndex = Math.min(
-            Math.floor(elapsed / FRAME_MS),
-            this.frames.length - 1
-          );
-          const index = this.frames.length - 1 - forwardIndex;
-          if (index !== this.lastFrameIndex) {
-            this.lastFrameIndex = index;
-            this.drawFrame(this.frames[index]);
-          }
-          if (elapsed < totalMs) {
-            requestAnimationFrame(tick);
-          } else {
-            resolve(undefined);
-          }
-        };
-        requestAnimationFrame(tick);
-      });
+      const token = await this._runFrameSequence((elapsed) => {
+        const forwardIndex = Math.min(
+          Math.floor(elapsed / FRAME_MS),
+          this.frames.length - 1
+        );
+        return this.frames.length - 1 - forwardIndex;
+      }, { playAudio: true });
+      if (token !== this._sequenceToken) return;
 
       this.mount.classList.remove("curtain-playing");
+      this.mount.classList.add("curtain-closed");
+      if (this.frames[0]) {
+        this.lastFrameIndex = 0;
+        this.drawFrame(this.frames[0]);
+      }
     } finally {
       this.playing = false;
     }
@@ -219,10 +252,12 @@ export class CurtainAnimation {
 
   /** 再来一局时恢复开场结束后的展开帷幕装饰帧 */
   snapOpen() {
-    if (this.playing || !this.loaded || !this.frames.length) return;
+    if (!this.loaded || !this.frames.length) return;
+    this._cancelSequence();
     const last = this.frames[this.frames.length - 1];
     this.mount.hidden = false;
     this.mount.setAttribute("aria-hidden", "false");
+    this.mount.classList.remove("curtain-closed", "curtain-playing");
     this.canvas.hidden = false;
     this.resize();
     this.lastFrameIndex = this.frames.length - 1;

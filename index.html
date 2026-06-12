@@ -17,6 +17,21 @@
       <div id="enemy-layer" class="enemy-layer" aria-hidden="true"></div>
 
       <div id="puppet-mount-player" class="puppet-mount"></div>
+      <div id="puppet-mount-boss" class="puppet-mount boss-mount" hidden></div>
+
+      <div id="boss-intro-layer" class="boss-intro-layer" aria-hidden="true" hidden>
+        <div class="boss-intro-vignette"></div>
+        <div class="boss-intro-sigil"></div>
+        <div class="boss-intro-strings">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="boss-intro-bone-shadow"></div>
+        <div class="boss-intro-shockwave"></div>
+      </div>
 
       <div id="combo-frame-layer" class="combo-frame-layer" aria-hidden="true">
         <img id="combo-frame-img" alt="" draggable="false" />
@@ -61,6 +76,15 @@
             </div>
           </div>
         </div>
+        <div class="boss-hud-block" hidden>
+          <div class="hp-bar hp-bar-boss">
+            <div class="hp-track">
+              <div id="boss-hp-fill" class="hp-fill hp-fill-boss"></div>
+            </div>
+            <span class="hp-label">白骨精</span>
+          </div>
+          <div class="boss-hud-spacer" aria-hidden="true"></div>
+        </div>
       </div>
 
       <div id="stage-curtain" class="stage-curtain" aria-hidden="true"></div>
@@ -68,6 +92,20 @@
       <div id="camera-panel" class="camera-panel">
         <video id="camera" playsinline muted autoplay></video>
         <canvas id="debug-canvas" class="debug-canvas"></canvas>
+      </div>
+
+      <div id="result-overlay" class="result-overlay" hidden>
+        <canvas id="result-particles" class="result-particles" aria-hidden="true"></canvas>
+        <div class="result-card">
+          <div id="result-victory-text" class="result-victory-text" hidden>
+            <h2 class="result-main-title">演出完美结束！</h2>
+            <p class="result-subtitle">
+              恭喜获得称号：<span class="result-title-badge">金牌皮影演绎家</span>！
+            </p>
+          </div>
+          <h2 id="result-title">白骨精胜</h2>
+          <button id="restart-btn" type="button">再试一次</button>
+        </div>
       </div>
 
       <div id="start-overlay" class="start-overlay">

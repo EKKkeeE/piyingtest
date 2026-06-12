@@ -73,9 +73,10 @@ const PARTS = {
 const MAX_HP = 20;
 const ATTACK_INTERVAL_SEC = 1;
 const ATTACK_DURATION_SEC = 0.34;
-const WALK_SWING_SPEED = 10;
+const WALK_SWING_SPEED = 14;
 const HIT_ZONE = { w: 250, h: 405 };
-const ATTACK_HIT_ZONE = { w: 340, h: 430 };
+const ATTACK_HIT_RANGE = { minAhead: 20, maxAhead: 210, y: 420 };
+const ATTACK_TRIGGER_RANGE = { minAhead: 80, maxAhead: 175, y: 450 };
 const ATTACK_IMPACT_START = 0.35;
 const ATTACK_IMPACT_END = 0.72;
 
@@ -93,13 +94,15 @@ export class EnemySoldier {
     this.targetX = 0;
     this.scale = 0.3;
     this.time = 0;
-    this.speed = 110;
+    this.speed = 260;
     this.hp = MAX_HP;
     this.maxHp = MAX_HP;
     this.attackTimer = 0;
     this.attackElapsed = 0;
     this.attacking = false;
     this.attackDamageDealt = false;
+    this.wasNearPlayer = false;
+    this.walking = false;
     this.hpFill = null;
     this.assembly = null;
     this._hitTimer = 0;
@@ -157,6 +160,8 @@ export class EnemySoldier {
     this.attackElapsed = 0;
     this.attacking = false;
     this.attackDamageDealt = false;
+    this.wasNearPlayer = false;
+    this.walking = false;
     this.active = true;
     clearTimeout(this._hitTimer);
     clearTimeout(this._deathTimer);
@@ -167,10 +172,14 @@ export class EnemySoldier {
     this._render();
   }
 
-  /** @param {number} dt */
-  update(dt) {
+  /**
+   * @param {number} dt
+   * @param {{ x: number, y: number } | null | undefined} playerPoint
+   */
+  update(dt, playerPoint) {
     if (!this.active || !this.root) return;
     this.time += dt;
+    this.walking = false;
 
     if (this.attacking) {
       this.attackElapsed += dt;
@@ -180,23 +189,28 @@ export class EnemySoldier {
         this.attackDamageDealt = false;
       }
     } else {
-      this.attackTimer += dt;
-      if (this.attackTimer >= ATTACK_INTERVAL_SEC) {
+      const nearPlayer = this._isNearPlayer(playerPoint);
+      if (nearPlayer) {
+        if (!this.wasNearPlayer || this.attackTimer >= ATTACK_INTERVAL_SEC) {
+          this.attackTimer = 0;
+          this.attacking = true;
+          this.attackElapsed = 0;
+          this.attackDamageDealt = false;
+        } else {
+          this.attackTimer += dt;
+        }
+      } else {
         this.attackTimer = 0;
-        this.attacking = true;
-        this.attackElapsed = 0;
-        this.attackDamageDealt = false;
-      } else if (this.x > this.targetX) {
-        // Stop walking while attacking; otherwise keep pushing left.
-        this.x = Math.max(this.targetX, this.x - this.speed * dt);
+        this.wasNearPlayer = false;
+        const center = this.getCenterStage();
+        const playerIsLeft = playerPoint && playerPoint.x < center.x;
+        if (playerIsLeft) {
+          this.x -= this.speed * dt;
+          this.walking = true;
+        }
       }
     }
-
-    if (this.x <= this.targetX) {
-      this.active = false;
-      this.root.classList.remove("active");
-      return;
-    }
+    this.wasNearPlayer = this._isNearPlayer(playerPoint);
 
     this._render();
   }
@@ -247,13 +261,26 @@ export class EnemySoldier {
     const p = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
     if (p < ATTACK_IMPACT_START || p > ATTACK_IMPACT_END) return false;
     const center = this.getCenterStage();
+    const ahead = center.x - point.x;
     const hit =
-      Math.abs(point.x - center.x) <= (ATTACK_HIT_ZONE.w * this.scale) / 2 &&
-      Math.abs(point.y - center.y) <= (ATTACK_HIT_ZONE.h * this.scale) / 2;
+      ahead >= ATTACK_HIT_RANGE.minAhead &&
+      ahead <= ATTACK_HIT_RANGE.maxAhead &&
+      Math.abs(point.y - center.y) <= ATTACK_HIT_RANGE.y;
     if (hit) {
       this.attackDamageDealt = true;
     }
     return hit;
+  }
+
+  _isNearPlayer(point) {
+    if (!point) return false;
+    const center = this.getCenterStage();
+    const ahead = center.x - point.x;
+    return (
+      ahead >= ATTACK_TRIGGER_RANGE.minAhead &&
+      ahead <= ATTACK_TRIGGER_RANGE.maxAhead &&
+      Math.abs(point.y - center.y) <= ATTACK_TRIGGER_RANGE.y
+    );
   }
 
   getCenterStage() {
@@ -271,7 +298,7 @@ export class EnemySoldier {
 
   _render() {
     if (!this.root) return;
-    const walking = !this.attacking && this.x > this.targetX + 1;
+    const walking = this.walking && !this.attacking;
     const step = Math.sin(this.time * WALK_SWING_SPEED);
     const bob = walking ? Math.abs(step) * 7 : Math.sin(this.time * 2.2) * 2;
     this.root.style.transform = `translate(${this.x}px, ${this.y - bob}px) scale(${this.scale})`;

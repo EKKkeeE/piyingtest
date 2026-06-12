@@ -36,4 +36,10 @@ export class BgmPlayer {
     this.audio.pause();
     this.audio.currentTime = 0;
   }
+
+  /** 再来一局：若已停止则立即重新播放 */
+  resumeAfterRestart() {
+    if (this.playing) return;
+    this.start();
+  }
 }

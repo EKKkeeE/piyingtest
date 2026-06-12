@@ -11,6 +11,8 @@ import { AttackFramePlayer } from "./attackFramePlayer.js";
 import { UltimateAttack } from "./ultimateAttack.js";
 import { UltimateFramePlayer } from "./ultimateFramePlayer.js";
 import { EnemySoldier } from "./enemySoldier.js";
+import { BossAI } from "./bossAI.js";
+import { ResultParticles } from "./resultParticles.js";
 import {
   detectOkSignFromResult,
   detectPeaceSignFromResult,
@@ -24,6 +26,8 @@ const USE_GPU = !new URLSearchParams(location.search).has("cpu");
 let handLandmarker = null;
 /** @type {import('./puppetRig.js').PuppetRig | null} */
 let playerRig = null;
+/** @type {import('./puppetRig.js').PuppetRig | null} */
+let bossRig = null;
 let fingerCtrl = null;
 /** @type {StringLines | null} */
 let stringLines = null;
@@ -47,6 +51,14 @@ const els = {
   hud: document.getElementById("hud"),
   battleHud: document.getElementById("battle-hud"),
   playerHpFill: document.getElementById("player-hp-fill"),
+  bossHpFill: document.getElementById("boss-hp-fill"),
+  bossHudBlock: document.querySelector(".boss-hud-block"),
+  resultOverlay: document.getElementById("result-overlay"),
+  resultCard: document.querySelector(".result-card"),
+  resultVictoryText: document.getElementById("result-victory-text"),
+  resultTitle: document.getElementById("result-title"),
+  resultParticlesCanvas: document.getElementById("result-particles"),
+  restartBtn: document.getElementById("restart-btn"),
   video: /** @type {HTMLVideoElement} */ (document.getElementById("camera")),
   debugCanvas: /** @type {HTMLCanvasElement} */ (
     document.getElementById("debug-canvas")
@@ -56,8 +68,10 @@ const els = {
   ),
   stageInteraction: document.getElementById("stage-interaction"),
   enemyLayer: document.getElementById("enemy-layer"),
+  bossIntroLayer: document.getElementById("boss-intro-layer"),
   goldenPills: document.getElementById("golden-pills"),
   puppetMountPlayer: document.getElementById("puppet-mount-player"),
+  puppetMountBoss: document.getElementById("puppet-mount-boss"),
   comboFrameLayer: document.getElementById("combo-frame-layer"),
   comboFrameImg: /** @type {HTMLImageElement} */ (
     document.getElementById("combo-frame-img")
@@ -84,19 +98,38 @@ let attackFramePlayer = null;
 let ultimateAttack = null;
 /** @type {UltimateFramePlayer | null} */
 let ultimateFramePlayer = null;
+/** @type {ResultParticles | null} */
+let resultParticles = null;
 /** @type {EnemySoldier[]} */
 let enemySoldiers = [];
 let enemySpawnCount = 0;
 let enemySpawnTimer = 0;
-const ENEMY_SPAWN_INTERVAL_SEC = 7;
-const ENEMY_MAX_SPAWNS = 4;
+let enemyNextSpawnInterval = 0;
+const ENEMY_SPAWN_INTERVAL_MIN_SEC = 1.5;
+const ENEMY_SPAWN_INTERVAL_MAX_SEC = 3;
+const ENEMY_MAX_SPAWNS = 10;
+const ENEMY_MAX_ACTIVE = 4;
 const PLAYER_MAX_HP = 200;
+const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
 const PLAYER_IFRAME_SEC = 0.8;
+const BOSS_DAMAGE_PER_HIT = 10;
+const BOSS_HIT_RADIUS = 90;
+const BOSS_ATTACK_RADIUS = 85;
+const BOSS_Y_OFFSET = 48;
+const BOSS_INTRO_DURATION = 3;
+const BOSS_DEATH_ANIMATION_MS = 1400;
 const ATTACKS_PER_GOLDEN_PILL = 4;
 const MAX_GOLDEN_PILLS = 3;
 let playerHp = PLAYER_MAX_HP;
 let playerIFrame = 0;
+let bossHp = BOSS_MAX_HP;
+let bossAttackCooldown = 0;
+let bossIntroTimer = 0;
+let bossPhase = "minions";
+let bossDeathSequenceRunning = false;
+/** @type {BossAI | null} */
+let bossAI = null;
 let goldenPills = 0;
 let goldenAttackCount = 0;
 let goldenPillSlots = [];
@@ -126,8 +159,23 @@ function initGoldenPills() {
 
 function updateGoldenPills(popIndex = -1) {
   els.goldenPills?.classList.toggle("pills-charged", goldenPills > 0);
+  const progressSlot = goldenPills < MAX_GOLDEN_PILLS ? goldenPills : -1;
+  const pillProgress =
+    goldenPills < MAX_GOLDEN_PILLS
+      ? goldenAttackCount / ATTACKS_PER_GOLDEN_PILL
+      : 0;
   goldenPillSlots.forEach((slot, index) => {
-    slot.classList.toggle("pill-filled", index < goldenPills);
+    const filled = index < goldenPills;
+    const progressing = index === progressSlot && pillProgress > 0;
+    slot.classList.toggle("pill-filled", filled);
+    slot.classList.toggle("pill-progressing", !filled && progressing);
+    const clampedProgress = Math.max(
+      0,
+      Math.min(1, progressing ? pillProgress : 0)
+    );
+    slot.style.setProperty("--pill-progress", `${clampedProgress}`);
+    slot.style.setProperty("--pill-progress-angle", `${clampedProgress}turn`);
+    slot.style.setProperty("--pill-progress-width", `${clampedProgress * 100}%`);
     slot.classList.remove("pill-pop");
     if (index === popIndex) {
       void slot.offsetWidth;
@@ -155,6 +203,86 @@ function resetPlayerHp() {
   updatePlayerHp();
 }
 
+function updateBossHp() {
+  const pct = Math.max(0, Math.min(100, (bossHp / BOSS_MAX_HP) * 100));
+  if (els.bossHpFill) {
+    els.bossHpFill.style.width = `${pct}%`;
+  }
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOutCubic(value) {
+  const t = clamp01(value);
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeInOutCubic(value) {
+  const t = clamp01(value);
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function lerp(from, to, t) {
+  return from + (to - from) * t;
+}
+
+function updateBossIntroAnchor() {
+  if (!els.bossIntroLayer) return;
+  const stageWidth = getStageWidth();
+  const xPct = 50 + (getBossHomeX() / Math.max(1, stageWidth)) * 100;
+  els.bossIntroLayer.style.setProperty("--boss-intro-x", `${xPct}%`);
+}
+
+function clearBossIntroEffects() {
+  bossIntroTimer = 0;
+  els.app?.classList.remove("boss-intro-shudder");
+  if (els.bossIntroLayer) {
+    els.bossIntroLayer.hidden = true;
+    els.bossIntroLayer.classList.remove("active");
+  }
+  els.puppetMountBoss?.classList.remove("boss-entering");
+}
+
+function resetBossBattle() {
+  bossHp = BOSS_MAX_HP;
+  bossAttackCooldown = 0;
+  bossIntroTimer = 0;
+  bossPhase = "minions";
+  bossDeathSequenceRunning = false;
+  bossAI = null;
+  updateBossHp();
+  clearBossIntroEffects();
+  if (els.bossHudBlock) {
+    els.bossHudBlock.hidden = true;
+  }
+  if (els.puppetMountBoss) {
+    els.puppetMountBoss.hidden = true;
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+  }
+  bossRig?.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
+  bossRig?.update(0, { direct: true });
+}
+
+function resetVictoryResultUI() {
+  resultParticles?.stop();
+  els.resultOverlay?.classList.remove("result-overlay--victory");
+  if (els.resultVictoryText) els.resultVictoryText.hidden = true;
+  if (els.resultOverlay) els.resultOverlay.hidden = true;
+}
+
+function showPlayerVictoryResult() {
+  resetVictoryResultUI();
+  if (els.resultVictoryText) els.resultVictoryText.hidden = false;
+  if (els.restartBtn) els.restartBtn.textContent = "再试一次";
+  if (els.resultOverlay) {
+    els.resultOverlay.classList.add("result-overlay--victory");
+    els.resultOverlay.hidden = false;
+  }
+  resultParticles?.start(/** @type {HTMLElement} */ (els.resultCard));
+}
+
 function damagePlayer(amount) {
   if (playerHp <= 0 || playerIFrame > 0) return false;
   playerHp = Math.max(0, playerHp - amount);
@@ -164,19 +292,66 @@ function damagePlayer(amount) {
   return true;
 }
 
+function damageBoss(amount) {
+  if (bossPhase !== "boss" || bossHp <= 0 || !bossRig) return false;
+  bossHp = Math.max(0, bossHp - amount);
+  bossRig.flashHit(amount >= 40 ? 0.35 : 0.2);
+  updateBossHp();
+  if (bossHp <= 0) {
+    bossPhase = "defeated";
+    bossAI = null;
+    runBossDeathSequence();
+  }
+  return true;
+}
+
+async function runBossDeathSequence() {
+  if (bossDeathSequenceRunning) return;
+  bossDeathSequenceRunning = true;
+
+  running = false;
+  cancelAnimationFrame(animId);
+  clearUltimateEarthquake();
+  staffGlow?.clear?.();
+  attackFramePlayer?.hide();
+  ultimateFramePlayer?.hide();
+  els.puppetMountPlayer?.classList.remove("combo-active", "ultimate-active");
+
+  if (els.puppetMountBoss) {
+    els.puppetMountBoss.classList.remove("boss-entering");
+    els.puppetMountBoss.classList.add("boss-defeated");
+  }
+
+  await new Promise((resolve) =>
+    setTimeout(resolve, BOSS_DEATH_ANIMATION_MS)
+  );
+
+  if (curtainAnim) {
+    await curtainAnim.playClose();
+  }
+  showPlayerVictoryResult();
+}
+
 function gainGoldenPill() {
   if (goldenPills >= MAX_GOLDEN_PILLS) return;
   goldenPills += 1;
   updateGoldenPills(goldenPills - 1);
 }
 
-function recordNormalAttackHit() {
-  if (goldenPills >= MAX_GOLDEN_PILLS) return;
-  goldenAttackCount += 1;
-  if (goldenAttackCount >= ATTACKS_PER_GOLDEN_PILL) {
-    goldenAttackCount = 0;
+function recordNormalAttackHit(hitCount = 1) {
+  if (goldenPills >= MAX_GOLDEN_PILLS || hitCount <= 0) return;
+  goldenAttackCount += hitCount;
+  while (
+    goldenAttackCount >= ATTACKS_PER_GOLDEN_PILL &&
+    goldenPills < MAX_GOLDEN_PILLS
+  ) {
+    goldenAttackCount -= ATTACKS_PER_GOLDEN_PILL;
     gainGoldenPill();
   }
+  if (goldenPills >= MAX_GOLDEN_PILLS) {
+    goldenAttackCount = 0;
+  }
+  updateGoldenPills();
 }
 
 function consumeGoldenPill() {
@@ -283,11 +458,26 @@ function applyPose(pose) {
   }
 }
 
+function getStageWidth() {
+  const rect =
+    layoutCache?.stageRect ??
+    els.stageInteraction?.getBoundingClientRect?.() ??
+    null;
+  return rect?.width || window.innerWidth || 1280;
+}
+
+function getBossHomeX() {
+  return getStageWidth() * 0.28;
+}
+
 function initSpawnPositions() {
   const playerX = 0;
   playerRig?.setRootTransform(playerX, 0, 0);
   if (fingerCtrl) {
     fingerCtrl.root = { x: playerX, y: 0, rotation: 0 };
+  }
+  if (bossPhase !== "boss" && bossPhase !== "bossIntro") {
+    bossRig?.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
   }
 }
 
@@ -324,26 +514,197 @@ function activeEnemies() {
   return enemySoldiers.filter((enemy) => enemy?.isAlive?.());
 }
 
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function bossStagePoint(stageRect) {
+  if (bossPhase !== "boss" || !bossRig || !stageRect) return null;
+  return (
+    bossRig.getJointStage("torso", "root", stageRect) ??
+    bossRig.getRootStage(stageRect)
+  );
+}
+
+function bossContainsStagePoint(point, stageRect) {
+  const bossPoint = bossStagePoint(stageRect);
+  return !!point && !!bossPoint && dist(point, bossPoint) <= BOSS_HIT_RADIUS;
+}
+
+function minionsCleared() {
+  return (
+    bossPhase === "minions" &&
+    enemySpawnCount >= ENEMY_MAX_SPAWNS &&
+    enemySoldiers.length >= ENEMY_MAX_SPAWNS &&
+    activeEnemies().length === 0
+  );
+}
+
+function applyBossIntroPose(progress) {
+  if (!bossRig) return;
+  const reveal = easeOutCubic(progress);
+  const unfurl = easeInOutCubic((progress - 0.18) / 0.58);
+  const settle = easeOutCubic((progress - 0.76) / 0.24);
+  const homeX = getBossHomeX();
+  const startX = homeX + getStageWidth() * 0.18;
+  const rise = Math.sin(clamp01(progress) * Math.PI) * -34;
+  const omenShake = progress > 0.72 ? Math.sin(progress * 80) * (1 - settle) * 4 : 0;
+  const armL = lerp(lerp(52, -76, unfurl), 0, settle);
+  const armR = lerp(lerp(-42, 48, unfurl), 0, settle);
+  const legL = lerp(lerp(24, -6, unfurl), 0, settle);
+  const legR = lerp(lerp(-18, 0, unfurl), 0, settle);
+
+  bossRig.setRootTransform(
+    lerp(startX, homeX, reveal),
+    BOSS_Y_OFFSET + rise,
+    lerp(-10, 0, settle) + omenShake
+  );
+  bossRig.setBoneRotation("torso", lerp(-18, 0, settle));
+  bossRig.setBoneRotation("arm_l", armL + Math.sin(progress * 18) * 5 * (1 - settle));
+  bossRig.setBoneRotation("arm_r", armR - Math.sin(progress * 16) * 4 * (1 - settle));
+  bossRig.setBoneRotation("leg_l", legL);
+  bossRig.setBoneRotation("leg_r", legR);
+  bossRig.update(0, { direct: true });
+}
+
+function startBossIntro() {
+  if (!bossRig || bossPhase !== "minions") return;
+  bossPhase = "bossIntro";
+  bossHp = BOSS_MAX_HP;
+  bossAttackCooldown = 0;
+  bossAI = null;
+  bossIntroTimer = BOSS_INTRO_DURATION;
+  updateBossHp();
+  if (els.bossHudBlock) {
+    els.bossHudBlock.hidden = true;
+  }
+  updateBossIntroAnchor();
+  if (els.bossIntroLayer) {
+    els.bossIntroLayer.hidden = false;
+    els.bossIntroLayer.classList.remove("active");
+    void els.bossIntroLayer.offsetWidth;
+    els.bossIntroLayer.classList.add("active");
+  }
+  els.app?.classList.add("boss-intro-shudder");
+  if (els.puppetMountBoss) {
+    els.puppetMountBoss.hidden = false;
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+    void els.puppetMountBoss.offsetWidth;
+    els.puppetMountBoss.classList.add("boss-entering");
+  }
+  applyBossIntroPose(0);
+}
+
+function finishBossIntro() {
+  if (!bossRig || bossPhase !== "bossIntro") return;
+  bossPhase = "boss";
+  clearBossIntroEffects();
+  bossHp = BOSS_MAX_HP;
+  bossAttackCooldown = 0;
+  updateBossHp();
+  if (els.bossHudBlock) {
+    els.bossHudBlock.hidden = false;
+  }
+  bossAI = new BossAI(bossRig, () => playerRig);
+  bossAI.reset(getBossHomeX(), BOSS_Y_OFFSET);
+}
+
+function updateBossBattle(dt, stageRect) {
+  if (bossPhase === "minions" && minionsCleared()) {
+    startBossIntro();
+  }
+  if (bossPhase === "bossIntro") {
+    bossIntroTimer = Math.max(0, bossIntroTimer - dt);
+    applyBossIntroPose(1 - bossIntroTimer / BOSS_INTRO_DURATION);
+    if (bossIntroTimer <= 0) {
+      finishBossIntro();
+    }
+    return;
+  }
+  if (bossPhase !== "boss" || !bossAI || !bossRig || !stageRect) return;
+
+  bossAttackCooldown = Math.max(0, bossAttackCooldown - dt);
+  bossAI.update(dt, stageRect);
+
+  if (!bossAI.canDealDamage || bossAttackCooldown > 0) return;
+  const playerTorso =
+    playerRig?.getJointStage("torso", "root", stageRect) ??
+    playerRig?.getRootStage(stageRect);
+  if (!playerTorso) return;
+
+  const bossRoot = bossRig.getRootStage(stageRect);
+  const bossWrist = bossRig.getHitPoint("arm_l", "wrist", stageRect, {
+    x: 0,
+    y: 0,
+  });
+  const bossHit =
+    (bossRoot && dist(bossRoot, playerTorso) <= BOSS_ATTACK_RADIUS) ||
+    (bossWrist && dist(bossWrist, playerTorso) <= BOSS_ATTACK_RADIUS);
+  if (bossHit && damagePlayer(BOSS_DAMAGE_PER_HIT)) {
+    bossAttackCooldown = 1;
+  }
+}
+
+function restartBattle() {
+  resetVictoryResultUI();
+  curtainAnim?.snapOpen();
+  clearUltimateEarthquake();
+  attackFramePlayer?.hide();
+  ultimateFramePlayer?.hide();
+  staffGlow?.clear?.();
+  staffCombo?.reset();
+  ultimateAttack?.reset();
+  resetGoldenPills();
+  resetPlayerHp();
+  resetEnemyBattle();
+  resetBossBattle();
+  initSpawnPositions();
+  lastPose = fingerCtrl?.getInitialPose() ?? null;
+  if (lastPose) {
+    applyPose(lastPose);
+    playerRig?.update(0, { direct: true });
+  }
+  bgm?.resumeAfterRestart?.();
+  running = true;
+  lastTs = 0;
+  cancelAnimationFrame(animId);
+  animId = requestAnimationFrame(loop);
+  ensureEnemySpawned();
+}
+
 function applyPlayerAttackDamage(hitPoints, damage) {
   const points = Array.isArray(hitPoints) ? hitPoints.filter(Boolean) : [hitPoints].filter(Boolean);
-  let hitAny = false;
+  let hitCount = 0;
   for (const enemy of activeEnemies()) {
     if (points.some((point) => enemy.containsStagePoint(point))) {
-      enemy.takeDamage(damage);
-      hitAny = true;
+      if (enemy.takeDamage(damage)) {
+        hitCount += 1;
+      }
     }
   }
-  return hitAny;
+  if (bossPhase === "boss" && points.some((point) => bossContainsStagePoint(point, layoutCache?.stageRect))) {
+    if (damageBoss(damage)) hitCount += 1;
+  }
+  return hitCount;
 }
 
 function applyUltimateAttackDamage(hitPoint) {
   for (const enemy of activeEnemies()) {
     enemy.takeDamage(enemy.containsStagePoint(hitPoint) ? 40 : 20);
   }
+  if (bossPhase === "boss") {
+    damageBoss(bossContainsStagePoint(hitPoint, layoutCache?.stageRect) ? 40 : 20);
+  }
 }
 
 function spawnEnemy() {
-  if (!els.enemyLayer || enemySpawnCount >= ENEMY_MAX_SPAWNS) return;
+  if (
+    !els.enemyLayer ||
+    enemySpawnCount >= ENEMY_MAX_SPAWNS ||
+    activeEnemies().length >= ENEMY_MAX_ACTIVE
+  ) {
+    return;
+  }
   const stageRect =
     layoutCache?.stageRect ??
     els.stageInteraction?.getBoundingClientRect?.() ??
@@ -355,22 +716,46 @@ function spawnEnemy() {
   enemySpawnCount += 1;
 }
 
+function randomEnemySpawnInterval() {
+  return (
+    ENEMY_SPAWN_INTERVAL_MIN_SEC +
+    Math.random() *
+      (ENEMY_SPAWN_INTERVAL_MAX_SEC - ENEMY_SPAWN_INTERVAL_MIN_SEC)
+  );
+}
+
+function resetEnemyBattle() {
+  enemySoldiers = [];
+  enemySpawnCount = 0;
+  enemySpawnTimer = 0;
+  enemyNextSpawnInterval = randomEnemySpawnInterval();
+  if (els.enemyLayer) {
+    els.enemyLayer.innerHTML = "";
+  }
+}
+
 function ensureEnemySpawned() {
   if (enemySpawnCount > 0) return;
   spawnEnemy();
 }
 
-function updateEnemy(dt) {
+function updateEnemy(dt, stageRect) {
   playerIFrame = Math.max(0, playerIFrame - dt);
   if (enemySpawnCount < ENEMY_MAX_SPAWNS) {
     enemySpawnTimer += dt;
-    if (enemySpawnTimer >= ENEMY_SPAWN_INTERVAL_SEC) {
+    if (enemySpawnTimer >= enemyNextSpawnInterval) {
       enemySpawnTimer = 0;
+      enemyNextSpawnInterval = randomEnemySpawnInterval();
       spawnEnemy();
     }
   }
+  const playerTorso =
+    stageRect && playerRig
+      ? playerRig.getJointStage("torso", "root", stageRect) ??
+        playerRig.getRootStage(stageRect)
+      : null;
   for (const enemy of enemySoldiers) {
-    enemy.update(dt);
+    enemy.update(dt, playerTorso);
   }
 }
 
@@ -480,12 +865,12 @@ function loop(ts) {
     if (comboActive && stageRect) {
       attackFramePlayer?.show(combo.frameIndex ?? 0, pose.root, stageRect);
       if (combo?.justImpacted) {
-        const landedHit = applyPlayerAttackDamage(
+        const hitCount = applyPlayerAttackDamage(
           attackFramePlayer?.getHitPoints(combo.frameIndex ?? 0),
           10
         );
-        if (landedHit) {
-          recordNormalAttackHit();
+        if (hitCount > 0) {
+          recordNormalAttackHit(hitCount);
         }
       }
     } else {
@@ -512,8 +897,9 @@ function loop(ts) {
 
     if (stageRect) {
       ensureEnemySpawned();
-      updateEnemy(dt);
+      updateEnemy(dt, stageRect);
       applyEnemyAttackDamage(stageRect);
+      updateBossBattle(dt, stageRect);
 
       staffGlow?.draw(dt, {
         active: false,
@@ -528,11 +914,20 @@ function loop(ts) {
 }
 
 async function initPuppet() {
-  const playerRigData = await loadRig("assets/wukong/rig.json");
+  const [playerRigData, bossRigData] = await Promise.all([
+    loadRig("assets/wukong/rig.json"),
+    loadRig("assets/baigujing/rig.json"),
+  ]);
 
   els.puppetMountPlayer.innerHTML = "";
+  if (els.puppetMountBoss) {
+    els.puppetMountBoss.innerHTML = "";
+  }
 
   playerRig = new PuppetRig(els.puppetMountPlayer, playerRigData);
+  bossRig = els.puppetMountBoss
+    ? new PuppetRig(els.puppetMountBoss, bossRigData)
+    : null;
   fingerCtrl = new FingerMarionette(playerRigData);
   layoutCache = new LayoutCache(
     els.stageInteraction,
@@ -546,6 +941,7 @@ async function initPuppet() {
   lastPose = fingerCtrl.getInitialPose();
   applyPose(lastPose);
   playerRig.update(0, { direct: true });
+  resetBossBattle();
 }
 
 async function startExperience() {
@@ -600,12 +996,8 @@ async function startExperience() {
     if (els.battleHud) {
       els.battleHud.hidden = false;
     }
-    enemySoldiers = [];
-    enemySpawnCount = 0;
-    enemySpawnTimer = 0;
-    if (els.enemyLayer) {
-      els.enemyLayer.innerHTML = "";
-    }
+    resetVictoryResultUI();
+    resetEnemyBattle();
 
     await initPuppet();
     await initHandLandmarker();
@@ -638,10 +1030,17 @@ async function startExperience() {
 }
 
 els.startBtn?.addEventListener("click", startExperience);
+els.restartBtn?.addEventListener("click", restartBattle);
 
 if (els.stageCurtain) {
   curtainAnim = new CurtainAnimation(els.stageCurtain);
   curtainAnim.preload().catch(() => {});
+}
+
+if (els.resultParticlesCanvas) {
+  resultParticles = new ResultParticles(
+    /** @type {HTMLCanvasElement} */ (els.resultParticlesCanvas)
+  );
 }
 
 window.addEventListener("pagehide", () => {
@@ -657,7 +1056,15 @@ window.addEventListener("resize", () => {
   staffGlow?.resize();
   layoutCache?.refresh(true);
   curtainAnim?.resize();
+  updateBossIntroAnchor();
+  if (resultParticles?.running) {
+    resultParticles.resize();
+    resultParticles.setCard(/** @type {HTMLElement} */ (els.resultCard));
+  }
   initSpawnPositions();
+  if (bossAI) {
+    bossAI.homeX = getBossHomeX();
+  }
   if (DEBUG && els.video.videoWidth) {
     els.debugCanvas.width = els.video.videoWidth;
     els.debugCanvas.height = els.video.videoHeight;

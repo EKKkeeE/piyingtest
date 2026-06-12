@@ -1,0 +1,173 @@
+{
+  "name": "baigujing",
+  "scale": 0.32,
+  "flipX": true,
+  "rootAnchor": [
+    209.5,
+    573.5
+  ],
+  "drawOrder": [
+    "leg_l",
+    "leg_r",
+    "torso",
+    "arm_l",
+    "arm_r"
+  ],
+  "parts": {
+    "torso": {
+      "path": "assets/baigujing/torso.png",
+      "width": 431,
+      "height": 833,
+      "joints": {
+        "shoulder_l": [
+          112.0,
+          323.2
+        ],
+        "shoulder_r": [
+          318.5,
+          322.9
+        ],
+        "hip_l": [
+          135.0,
+          575.0
+        ],
+        "hip_r": [
+          285.0,
+          572.0
+        ],
+        "root": [
+          209.5,
+          573.5
+        ],
+        "head": [
+          215.3,
+          174.9
+        ]
+      },
+      "rotateJoint": "root"
+    },
+    "arm_l": {
+      "path": "assets/baigujing/arm_l.png",
+      "width": 358,
+      "height": 415,
+      "joints": {
+        "shoulder": [
+          329.1,
+          27.1
+        ],
+        "elbow": [
+          280.1,
+          108.6
+        ],
+        "wrist": [
+          133.7,
+          301.2
+        ]
+      },
+      "rotateJoint": "shoulder"
+    },
+    "arm_r": {
+      "path": "assets/baigujing/arm_r.png",
+      "width": 366,
+      "height": 410,
+      "joints": {
+        "shoulder": [
+          28.0,
+          27.7
+        ],
+        "elbow": [
+          41.0,
+          98.5
+        ],
+        "wrist": [
+          231.6,
+          295.3
+        ]
+      },
+      "rotateJoint": "shoulder"
+    },
+    "leg_l": {
+      "path": "assets/baigujing/leg_l.png",
+      "width": 219,
+      "height": 515,
+      "joints": {
+        "hip": [
+          35.1,
+          27.0
+        ],
+        "knee": [
+          13.9,
+          60.8
+        ],
+        "ankle": [
+          60.3,
+          455.7
+        ]
+      },
+      "rotateJoint": "hip"
+    },
+    "leg_r": {
+      "path": "assets/baigujing/leg_r.png",
+      "width": 210,
+      "height": 518,
+      "joints": {
+        "hip": [
+          35.4,
+          28.5
+        ],
+        "knee": [
+          12.8,
+          62.6
+        ],
+        "ankle": [
+          52.5,
+          459.8
+        ]
+      },
+      "rotateJoint": "hip"
+    }
+  },
+  "links": [
+    {
+      "parent": "torso",
+      "parentJoint": "hip_l",
+      "child": "leg_l",
+      "childJoint": "hip"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "hip_r",
+      "child": "leg_r",
+      "childJoint": "hip"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "shoulder_l",
+      "child": "arm_l",
+      "childJoint": "shoulder"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "shoulder_r",
+      "child": "arm_r",
+      "childJoint": "shoulder"
+    }
+  ],
+  "defaults": {
+    "torso": {
+      "rotation": 0
+    },
+    "arm_l": {
+      "rotation": 0
+    },
+    "arm_r": {
+      "rotation": 0
+    },
+    "leg_l": {
+      "rotation": 0
+    },
+    "leg_r": {
+      "rotation": 8
+    }
+  }
+}

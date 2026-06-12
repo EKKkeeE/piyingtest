@@ -34,6 +34,11 @@ export class StaffGlow {
     this._h = rect.height;
   }
 
+  clear() {
+    this._intensity = 0;
+    this.ctx?.clearRect(0, 0, this._w, this._h);
+  }
+
   /**
    * @param {number} dt
    * @param {{ active: boolean, playerRig: import('./puppetRig.js').PuppetRig, stageRect: DOMRect }} opts
