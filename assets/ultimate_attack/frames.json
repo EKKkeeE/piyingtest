@@ -1,0 +1,207 @@
+{
+  "source": "PSD layers 1-10",
+  "baseCanvas": {
+    "width": 1672,
+    "height": 941
+  },
+  "frames": [
+    {
+      "src": "assets/ultimate_attack/frame-01.png",
+      "width": 712,
+      "height": 886,
+      "offset": {
+        "x": 423,
+        "y": 34
+      },
+      "layerRect": {
+        "left": 191,
+        "top": 441,
+        "right": 903,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 387,
+        "y": 885
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-02.png",
+      "width": 1022,
+      "height": 897,
+      "offset": {
+        "x": 170,
+        "y": 23
+      },
+      "layerRect": {
+        "left": 1126,
+        "top": 430,
+        "right": 2148,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 640,
+        "y": 896
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-03.png",
+      "width": 1636,
+      "height": 917,
+      "offset": {
+        "x": -280,
+        "y": 3
+      },
+      "layerRect": {
+        "left": 2306,
+        "top": 410,
+        "right": 3942,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 1090,
+        "y": 916
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-04.png",
+      "width": 2044,
+      "height": 927,
+      "offset": {
+        "x": -744,
+        "y": -7
+      },
+      "layerRect": {
+        "left": 4037,
+        "top": 400,
+        "right": 6081,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 1554,
+        "y": 926
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-05.png",
+      "width": 1689,
+      "height": 1251,
+      "offset": {
+        "x": -326,
+        "y": -331
+      },
+      "layerRect": {
+        "left": 6401,
+        "top": 76,
+        "right": 8090,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 1136,
+        "y": 1250
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-06.png",
+      "width": 1506,
+      "height": 1292,
+      "offset": {
+        "x": 459,
+        "y": -372
+      },
+      "layerRect": {
+        "left": 8270,
+        "top": 35,
+        "right": 9776,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 351,
+        "y": 1291
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-07.png",
+      "width": 1726,
+      "height": 908,
+      "offset": {
+        "x": 418,
+        "y": 12
+      },
+      "layerRect": {
+        "left": 9950,
+        "top": 419,
+        "right": 11676,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 392,
+        "y": 907
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-08.png",
+      "width": 1709,
+      "height": 901,
+      "offset": {
+        "x": 279,
+        "y": 19
+      },
+      "layerRect": {
+        "left": 11828,
+        "top": 426,
+        "right": 13537,
+        "bottom": 1327
+      },
+      "characterAnchor": {
+        "x": 531,
+        "y": 900
+      }
+    },
+    {
+      "src": "assets/ultimate_attack/frame-09.png",
+      "width": 1710,
+      "height": 950,
+      "offset": {
+        "x": 279,
+        "y": 19
+      },
+      "layerRect": {
+        "left": 13717,
+        "top": 410,
+        "right": 15427,
+        "bottom": 1360
+      },
+      "characterAnchor": {
+        "x": 945,
+        "y": 949
+      },
+      "alignmentNote": "Aligned to frame 08 by request"
+    },
+    {
+      "src": "assets/ultimate_attack/frame-10.png",
+      "width": 697,
+      "height": 915,
+      "offset": {
+        "x": 451,
+        "y": 5
+      },
+      "layerRect": {
+        "left": 15738,
+        "top": 421,
+        "right": 16435,
+        "bottom": 1336
+      },
+      "characterAnchor": {
+        "x": 359,
+        "y": 914
+      }
+    }
+  ],
+  "alignment": {
+    "method": "lower-body character anchor",
+    "fixedAnchor": {
+      "x": 810,
+      "y": 919
+    }
+  }
+}

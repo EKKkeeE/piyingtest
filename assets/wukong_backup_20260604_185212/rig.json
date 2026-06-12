@@ -1,0 +1,192 @@
+{
+  "name": "sun_wukong",
+  "scale": 0.32,
+  "flipX": false,
+  "rootAnchor": [
+    214.9,
+    155.5
+  ],
+  "drawOrder": [
+    "leg_l",
+    "leg_r",
+    "torso",
+    "arm_l",
+    "arm_r"
+  ],
+  "parts": {
+    "torso": {
+      "path": "assets/wukong/torso.png",
+      "width": 439,
+      "height": 792,
+      "joints": {
+        "shoulder_l": [
+          119.5,
+          303.5
+        ],
+        "shoulder_r": [
+          310.4,
+          305.8
+        ],
+        "hip_l": [
+          108.1,
+          748.4
+        ],
+        "hip_r": [
+          332.0,
+          749.1
+        ],
+        "root": [
+          220.1,
+          748.8
+        ],
+        "head": [
+          214.9,
+          155.5
+        ],
+        "neck": [
+          218.5,
+          228.0
+        ]
+      },
+      "rotateJoint": "head"
+    },
+    "arm_l": {
+      "path": "assets/wukong/arm_l.png",
+      "width": 188,
+      "height": 453,
+      "joints": {
+        "shoulder": [
+          113.5,
+          34.8
+        ],
+        "elbow": [
+          33.8,
+          187.0
+        ],
+        "wrist": [
+          67.4,
+          345.5
+        ]
+      },
+      "rotateJoint": "shoulder"
+    },
+    "arm_r": {
+      "path": "assets/wukong/arm_r.png",
+      "width": 448,
+      "height": 626,
+      "joints": {
+        "shoulder": [
+          60.0,
+          142.5
+        ],
+        "elbow": [
+          139.7,
+          307.6
+        ],
+        "wrist": [
+          302.2,
+          524.0
+        ]
+      },
+      "rotateJoint": "shoulder"
+    },
+    "leg_l": {
+      "path": "assets/wukong/leg_l.png",
+      "width": 311,
+      "height": 350,
+      "joints": {
+        "hip": [
+          30.3,
+          25.8
+        ],
+        "knee": [
+          142.6,
+          146.0
+        ],
+        "ankle": [
+          182.8,
+          271.3
+        ]
+      },
+      "rotateJoint": "hip"
+    },
+    "leg_r": {
+      "path": "assets/wukong/leg_r.png",
+      "width": 309,
+      "height": 359,
+      "joints": {
+        "hip": [
+          29.9,
+          26.6
+        ],
+        "knee": [
+          140.0,
+          150.8
+        ],
+        "ankle": [
+          177.5,
+          279.1
+        ]
+      },
+      "rotateJoint": "hip"
+    }
+  },
+  "links": [
+    {
+      "parent": "torso",
+      "parentJoint": "hip_l",
+      "child": "leg_l",
+      "childJoint": "hip"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "hip_r",
+      "child": "leg_r",
+      "childJoint": "hip"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "shoulder_l",
+      "child": "arm_l",
+      "childJoint": "shoulder"
+    },
+    {
+      "parent": "torso",
+      "parentJoint": "shoulder_r",
+      "child": "arm_r",
+      "childJoint": "shoulder"
+    }
+  ],
+  "defaults": {
+    "torso": {
+      "rotation": 0
+    },
+    "arm_l": {
+      "rotation": 0
+    },
+    "arm_r": {
+      "rotation": 0
+    },
+    "leg_l": {
+      "rotation": 0
+    },
+    "leg_r": {
+      "rotation": 0
+    }
+  },
+  "fingerBindings": [
+    {
+      "id": "line_head",
+      "label": "头部",
+      "hand": "left",
+      "finger": "middle",
+      "part": "torso",
+      "joint": "head",
+      "rotateJoint": "head",
+      "hangJoint": "root",
+      "stringLength": 520,
+      "minRot": -42,
+      "maxRot": 42
+    }
+  ]
+}
