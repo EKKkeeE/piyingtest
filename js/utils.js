@@ -112,6 +112,40 @@ export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+/** 帧率无关指数平滑：speed 越大越跟手 */
+export function smoothExp(current, target, speed, dt) {
+  const t = 1 - Math.exp(-Math.max(0, speed) * Math.max(0, dt));
+  return current + (target - current) * t;
+}
+
+/**
+ * @param {Point} current
+ * @param {Point} target
+ * @param {number} speed
+ * @param {number} dt
+ */
+export function smoothPointExp(current, target, speed, dt) {
+  return {
+    x: smoothExp(current.x, target.x, speed, dt),
+    y: smoothExp(current.y, target.y, speed, dt),
+  };
+}
+
+/**
+ * @param {number} current
+ * @param {number} target
+ * @param {number} speed
+ * @param {number} dt
+ * @param {number} [maxDelta]
+ */
+export function smoothAngleExp(current, target, speed, dt, maxDelta = 999) {
+  let diff = ((target - current + 180) % 360) - 180;
+  if (diff > maxDelta) diff = maxDelta;
+  if (diff < -maxDelta) diff = -maxDelta;
+  const t = 1 - Math.exp(-Math.max(0, speed) * Math.max(0, dt));
+  return current + diff * t;
+}
+
 /**
  * 计算 limb 从当前姿态转到自然下垂（指向图像下方）所需的旋转角。
  * @param {number} jx 关节 x

@@ -2,7 +2,7 @@
 import { FingerMarionette } from "./fingerMarionette.js";
 import { StringLines } from "./stringLines.js";
 import { LayoutCache } from "./layoutCache.js";
-import { createHandDetector } from "./handDetect.js";
+import { createHandDetector, TARGET_DETECT_FPS } from "./handDetect.js";
 import { CurtainAnimation } from "./curtainAnimation.js";
 import { BgmPlayer } from "./bgm.js";
 import { StaffGlow } from "./staffGlow.js";
@@ -17,10 +17,17 @@ import {
   detectOkSignFromResult,
   detectPeaceSignFromResult,
 } from "./gestureDetect.js";
+
+const CAMERA_TARGET_FPS = 60;
+/** 皮影模拟固定步长，与手部检测对齐，避免高刷屏 variable-dt 插值节奏错乱 */
+const SIM_DT = 1 / TARGET_DETECT_FPS;
+const MAX_SIM_STEPS = 3;
 const DEBUG =
   new URLSearchParams(location.search).has("debug") ||
   new URLSearchParams(location.search).has("d");
 const USE_GPU = !new URLSearchParams(location.search).has("cpu");
+/** MediaPipe 是否成功启用 GPU 推理 */
+let gpuHandEnabled = false;
 
 /** @type {import('@mediapipe/tasks-vision').HandLandmarker | null} */
 let handLandmarker = null;
@@ -38,6 +45,7 @@ let handDetector = null;
 let running = false;
 let animId = 0;
 let lastTs = 0;
+let simAccum = 0;
 /** @type {{ hasHand: boolean, bones: object, strings: Array } | null} */
 let lastPose = null;
 /** @type {MediaStream | null} */
@@ -293,7 +301,7 @@ function damagePlayer(amount) {
 }
 
 function damageBoss(amount) {
-  if (bossPhase !== "boss" || bossHp <= 0 || !bossRig) return false;
+  if (!isBossAttackable()) return false;
   bossHp = Math.max(0, bossHp - amount);
   bossRig.flashHit(amount >= 40 ? 0.35 : 0.2);
   updateBossHp();
@@ -380,9 +388,21 @@ async function openCamera(videoConstraints) {
 
 async function acquireCameraStream() {
   stopCamera();
+  const fps = { ideal: CAMERA_TARGET_FPS, min: 30 };
   const attempts = [
-    { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-    { facingMode: "user", width: { ideal: 480 }, height: { ideal: 360 } },
+    {
+      facingMode: "user",
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: fps,
+    },
+    {
+      facingMode: "user",
+      width: { ideal: 480 },
+      height: { ideal: 360 },
+      frameRate: fps,
+    },
+    { facingMode: "user", frameRate: fps },
     true,
   ];
   let lastErr = null;
@@ -437,15 +457,32 @@ async function initHandLandmarker() {
   const wasmPath =
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
   const vision = await FilesetResolver.forVisionTasks(wasmPath);
-  handLandmarker = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-      delegate: USE_GPU ? "GPU" : "CPU",
-    },
-    runningMode: "VIDEO",
-    numHands: 1,
-  });
+  const delegates = USE_GPU ? ["GPU", "CPU"] : ["CPU"];
+  let lastErr = null;
+
+  for (const delegate of delegates) {
+    try {
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate,
+        },
+        runningMode: "VIDEO",
+        numHands: 1,
+      });
+      gpuHandEnabled = delegate === "GPU";
+      console.info(
+        `[hand] MediaPipe ${delegate} · ${TARGET_DETECT_FPS} fps · camera target ${CAMERA_TARGET_FPS} fps`
+      );
+      return;
+    } catch (err) {
+      lastErr = err;
+      handLandmarker = null;
+    }
+  }
+
+  throw lastErr ?? new Error("无法初始化手部识别");
 }
 
 function applyPose(pose) {
@@ -518,8 +555,12 @@ function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function isBossAttackable() {
+  return bossPhase === "boss" && bossHp > 0 && !!bossRig;
+}
+
 function bossStagePoint(stageRect) {
-  if (bossPhase !== "boss" || !bossRig || !stageRect) return null;
+  if (!isBossAttackable() || !stageRect) return null;
   return (
     bossRig.getJointStage("torso", "root", stageRect) ??
     bossRig.getRootStage(stageRect)
@@ -667,6 +708,7 @@ function restartBattle() {
   bgm?.resumeAfterRestart?.();
   running = true;
   lastTs = 0;
+  simAccum = 0;
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
   ensureEnemySpawned();
@@ -682,7 +724,7 @@ function applyPlayerAttackDamage(hitPoints, damage) {
       }
     }
   }
-  if (bossPhase === "boss" && points.some((point) => bossContainsStagePoint(point, layoutCache?.stageRect))) {
+  if (isBossAttackable() && points.some((point) => bossContainsStagePoint(point, layoutCache?.stageRect))) {
     if (damageBoss(damage)) hitCount += 1;
   }
   return hitCount;
@@ -692,7 +734,7 @@ function applyUltimateAttackDamage(hitPoint) {
   for (const enemy of activeEnemies()) {
     enemy.takeDamage(enemy.containsStagePoint(hitPoint) ? 40 : 20);
   }
-  if (bossPhase === "boss") {
+  if (isBossAttackable()) {
     damageBoss(bossContainsStagePoint(hitPoint, layoutCache?.stageRect) ? 40 : 20);
   }
 }
@@ -777,36 +819,51 @@ function loop(ts) {
   if (!running) return;
   animId = requestAnimationFrame(loop);
 
-  const dt = lastTs ? Math.min((ts - lastTs) / 1000, 0.05) : 0.016;
+  const frameDt = lastTs ? Math.min((ts - lastTs) / 1000, 0.1) : SIM_DT;
   lastTs = ts;
 
   if (handLandmarker && handDetector && fingerCtrl && playerRig && layoutCache) {
-    const handResult = handDetector.tick(handLandmarker, ts);
+    const handTick = handDetector.tick(handLandmarker, ts);
 
     if (!lastPose) {
       lastPose = fingerCtrl.getInitialPose();
       applyPose(lastPose);
     }
 
-    if (!handResult) {
-      clearUltimateEarthquake();
-      playerRig.update(dt, {
-        idle: !lastPose.hasHand,
-        direct: false,
-        alpha: lastPose.hasHand ? 0.55 : 0.15,
-      });
-      return;
+    if (handTick?.fresh) {
+      fingerCtrl.updateFromHand(handTick.result, layoutCache);
+      if (DEBUG) drawDebugHands(handTick.result);
     }
 
-    layoutCache.refresh(true);
-    fingerCtrl.updateFromHand(handResult, layoutCache);
-    if (DEBUG) drawDebugHands(handResult);
+    layoutCache.refresh();
 
-    const pose = fingerCtrl.step(dt, playerRig, layoutCache);
+    simAccum = Math.min(simAccum + frameDt, SIM_DT * MAX_SIM_STEPS);
+    let steps = 0;
+    while (simAccum >= SIM_DT && steps < MAX_SIM_STEPS) {
+      simAccum -= SIM_DT;
+      steps += 1;
+      lastPose = fingerCtrl.step(SIM_DT, playerRig, layoutCache);
+      applyPose(lastPose);
+    }
+
+    const pose = lastPose;
+    playerRig.update(SIM_DT, {
+      idle: !pose?.hasHand,
+      direct: true,
+      alpha: pose?.hasHand ? 0.45 : 0.12,
+    });
+
     const stageRect = layoutCache.stageRect;
+    if (stageRect) {
+      ensureEnemySpawned();
+      updateEnemy(frameDt, stageRect);
+      applyEnemyAttackDamage(stageRect);
+      updateBossBattle(frameDt, stageRect);
+    }
+
     const cachedHand = handDetector.getCached();
     const okSign = detectOkSignFromResult(cachedHand);
-    const ultimate = ultimateAttack?.step(dt, {
+    const ultimate = ultimateAttack?.step(frameDt, {
       okSign: okSign && goldenPills > 0,
       root: pose.root,
     });
@@ -819,19 +876,10 @@ function loop(ts) {
       : detectPeaceSignFromResult(cachedHand);
     const combo = ultimateActive
       ? { active: false }
-      : staffCombo?.step(dt, {
+      : staffCombo?.step(frameDt, {
           peaceSign: isPeaceSign,
           pose,
         });
-
-    lastPose = pose;
-    applyPose(pose);
-
-    playerRig.update(dt, {
-      idle: !pose.hasHand,
-      direct: true,
-      alpha: pose.hasHand ? 0.55 : 0.15,
-    });
 
     const comboActive = !!combo?.active;
     els.puppetMountPlayer?.classList.toggle("combo-active", comboActive);
@@ -879,37 +927,37 @@ function loop(ts) {
 
     const strings = ultimateActive
       ? ultimateFramePlayer?.buildStrings(
-          lastPose.fingerNodes ?? [],
+          pose.fingerNodes ?? [],
           ultimate?.frameIndex ?? 0
         ) ?? []
       : comboActive
       ? attackFramePlayer?.buildStrings(
-          lastPose.fingerNodes ?? [],
+          pose.fingerNodes ?? [],
           combo?.frameIndex ?? 0
         ) ?? []
       : fingerCtrl.buildStringsFromDom(playerRig, layoutCache);
 
+    const handSkeleton = fingerCtrl.syncHandSkeletonWithStrings(
+      pose.handSkeleton ?? { landmarks: [], connections: [] },
+      strings
+    );
+
     stringLines?.draw({
-      fingerNodes: lastPose.fingerNodes ?? [],
-      strings: strings.length ? strings : lastPose.strings ?? [],
-      handSkeleton: lastPose.handSkeleton ?? { landmarks: [], connections: [] },
+      fingerNodes: [],
+      strings: strings.length ? strings : pose.strings ?? [],
+      handSkeleton,
     });
 
     if (stageRect) {
-      ensureEnemySpawned();
-      updateEnemy(dt, stageRect);
-      applyEnemyAttackDamage(stageRect);
-      updateBossBattle(dt, stageRect);
-
-      staffGlow?.draw(dt, {
+      staffGlow?.draw(frameDt, {
         active: false,
         playerRig,
         stageRect,
       });
-
     }
   } else {
-    playerRig?.update(dt, { idle: true, alpha: 0.1 });
+    simAccum = 0;
+    playerRig?.update(SIM_DT, { idle: true, alpha: 0.1 });
   }
 }
 
@@ -955,7 +1003,10 @@ async function startExperience() {
     els.video.srcObject = stream;
     await els.video.play();
 
-    handDetector = createHandDetector(els.video);
+    await initHandLandmarker();
+    handDetector = createHandDetector(els.video, {
+      detectFps: TARGET_DETECT_FPS,
+    });
 
     if (DEBUG) {
       els.debugCanvas.width = els.video.videoWidth || 640;
@@ -1000,12 +1051,12 @@ async function startExperience() {
     resetEnemyBattle();
 
     await initPuppet();
-    await initHandLandmarker();
 
     els.startOverlay.classList.add("hidden");
 
     running = true;
     lastTs = 0;
+    simAccum = 0;
     cancelAnimationFrame(animId);
     animId = requestAnimationFrame(loop);
 

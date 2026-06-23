@@ -1,8 +1,24 @@
 const WINDUP_HOLD_SEC = 0.12;
-const ATTACK_FPS = 25;
-const FRAME_COUNT = 5;
-const DURATION_SEC = FRAME_COUNT / ATTACK_FPS;
-const IMPACT_AT_SEC = 0.10;
+const IMPACT_FRAME_INDEX = 2;
+const BASE_FRAME_SEC = 1 / 25;
+const FRAME_DURATIONS = [
+  BASE_FRAME_SEC,
+  BASE_FRAME_SEC,
+  BASE_FRAME_SEC * 1.5,
+  BASE_FRAME_SEC,
+  BASE_FRAME_SEC,
+];
+const FRAME_COUNT = FRAME_DURATIONS.length;
+const DURATION_SEC = FRAME_DURATIONS.reduce((sum, d) => sum + d, 0);
+
+function frameIndexAt(elapsed) {
+  let time = 0;
+  for (let i = 0; i < FRAME_DURATIONS.length; i++) {
+    time += FRAME_DURATIONS[i];
+    if (elapsed < time) return i;
+  }
+  return FRAME_COUNT - 1;
+}
 
 export class StaffComboAttack {
   constructor() {
@@ -48,13 +64,9 @@ export class StaffComboAttack {
   }
 
   _stepActive(dt, peaceSign) {
-    const prevElapsed = this.elapsed;
     this.elapsed += dt;
 
-    const timeFrame = Math.min(
-      FRAME_COUNT - 1,
-      Math.floor((this.elapsed / DURATION_SEC) * FRAME_COUNT)
-    );
+    const timeFrame = frameIndexAt(this.elapsed);
     // 每帧至少展示一次，避免 dt 跳变时直接跳过中间帧
     if (timeFrame > this.displayFrame) {
       this.displayFrame = Math.min(this.displayFrame + 1, timeFrame);
@@ -63,9 +75,7 @@ export class StaffComboAttack {
     const frameIndex = this.displayFrame;
     const progress = Math.min(1, this.elapsed / DURATION_SEC);
     const justImpacted =
-      !this.impactPlayed &&
-      prevElapsed < IMPACT_AT_SEC &&
-      this.elapsed >= IMPACT_AT_SEC;
+      !this.impactPlayed && this.displayFrame >= IMPACT_FRAME_INDEX;
 
     if (justImpacted) this.impactPlayed = true;
 

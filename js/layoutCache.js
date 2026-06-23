@@ -88,12 +88,16 @@ export class LayoutCache {
     };
   }
 
-  /** @param {{ x: number, y: number }} stagePt */
-  stageToAssembly(stagePt) {
+  /**
+   * @param {{ x: number, y: number }} stagePt
+   * @param {number} [rootX] 与 fingerMarionette.root 同步，避免 step 内上一帧 root
+   * @param {number} [rootY]
+   */
+  stageToAssembly(stagePt, rootX, rootY) {
     const rig = this.getRig();
     if (!rig) return { x: 0, y: 0 };
-    const rx = rig.rootExtra.x;
-    const ry = rig.rootExtra.y;
+    const rx = rootX ?? rig.rootExtra.x;
+    const ry = rootY ?? rig.rootExtra.y;
     const cx = this.mountCx + rx;
     const cy = this.mountCy + ry;
     const clientX = this.stageRect.left + stagePt.x;

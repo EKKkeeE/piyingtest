@@ -13,10 +13,99 @@ export function holeAt(pivot, holeOffset, angleDeg) {
   };
 }
 
+/** 二连杆搜索步长 */
+const CHAIN_SOLVE_STEP = 0.5;
+/** 同分候选里优先接近上一帧的解（越低越灵敏） */
+const CONTINUITY_WEIGHT = 0.18;
+/** score 接近最优时仍视为同一档，在此档内选 continuity 最小 */
+const SCORE_TIE_EPS = 2.5;
+/** 先在上一帧角度附近搜索，避免全范围跳解 */
+const LOCAL_SEARCH_DEG = 36;
+
 function shortestAngleDelta(a, b) {
   let d = ((a - b + 180) % 360) - 180;
   if (d < -180) d += 360;
   return d;
+}
+
+function clampRange(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+/** 在 score 最优档内选 continuity 最小的候选 */
+function pickSticky(candidates) {
+  if (!candidates.length) return null;
+  let minScore = Infinity;
+  for (const c of candidates) {
+    if (c.score < minScore) minScore = c.score;
+  }
+  let best = null;
+  let bestCont = Infinity;
+  for (const c of candidates) {
+    if (c.score > minScore + SCORE_TIE_EPS) continue;
+    if (c.cont < bestCont || (c.cont === bestCont && c.score < (best?.score ?? Infinity))) {
+      bestCont = c.cont;
+      best = c;
+    }
+  }
+  return best;
+}
+
+function reachScore(dist, stringLen, cont, useLen, EPS, continuityWeight) {
+  const cw = continuityWeight ?? CONTINUITY_WEIGHT;
+  if (useLen) {
+    const under = Math.max(0, stringLen - dist);
+    const over = Math.max(0, dist - stringLen - EPS);
+    return under * 1.35 + over * 14 + cont * cw;
+  }
+  return dist + cont * cw;
+}
+
+function searchReachWindow(
+  finger,
+  parent,
+  child,
+  endAt,
+  stringLen,
+  paMin,
+  paMax,
+  caMin,
+  caMax,
+  continuityWeight = CONTINUITY_WEIGHT,
+  childContinuityScale = 1,
+  parentContinuityScale = 1
+) {
+  const useLen = stringLen > 0;
+  const EPS = 0.8;
+  const candidates = [];
+  const childCont = Math.max(0, childContinuityScale);
+  const parentCont = Math.max(0, parentContinuityScale);
+
+  for (
+    let pa = paMin;
+    pa <= paMax;
+    pa += CHAIN_SOLVE_STEP
+  ) {
+    for (
+      let ca = caMin;
+      ca <= caMax;
+      ca += CHAIN_SOLVE_STEP
+    ) {
+      const end = endAt(pa, ca);
+      if (!end) continue;
+      const dist = Math.hypot(end.x - finger.x, end.y - finger.y);
+      const cont =
+        Math.abs(shortestAngleDelta(pa, parent.prevAngle)) * parentCont +
+        Math.abs(shortestAngleDelta(ca, child.prevAngle)) * childCont;
+      candidates.push({
+        parent: pa,
+        child: ca,
+        score: reachScore(dist, stringLen, cont, useLen, EPS, continuityWeight),
+        cont,
+      });
+    }
+  }
+  return pickSticky(candidates);
 }
 
 /**
@@ -58,14 +147,14 @@ export function solveFixedStringAngle(
   // - 绳不可伸长：|finger-hole| <= stringLen
   // - 绳只能拉不能推：满足约束时，关节仅受重力，取最低势能姿态
   // - 若所有角都违约（手把线拉得过紧），取最小超长量的姿态
-  for (let a = minRot; a <= maxRot; a += 0.5) {
+  for (let a = minRot; a <= maxRot; a += CHAIN_SOLVE_STEP) {
     const h = holeAt(pivot, holeOffset, a);
     const dist = Math.hypot(h.x - finger.x, h.y - finger.y);
     const continuity = Math.abs(shortestAngleDelta(a, prevAngle));
 
     if (dist <= stringLen + EPS) {
       const gravityPenalty = Math.abs(shortestAngleDelta(a, hang));
-      const score = gravityPenalty * 1.0 + continuity * 0.15;
+      const score = gravityPenalty * 1.0 + continuity * CONTINUITY_WEIGHT;
       if (!bestFeasible || score < bestFeasible.score) {
         bestFeasible = { a, score };
       }
@@ -74,7 +163,7 @@ export function solveFixedStringAngle(
 
     const overstretch = dist - stringLen;
     const gravityPenalty = Math.abs(shortestAngleDelta(a, hang));
-    const score = overstretch * 14 + gravityPenalty * 0.12 + continuity * 0.08;
+    const score = overstretch * 14 + gravityPenalty * 0.12 + continuity * CONTINUITY_WEIGHT * 0.35;
     if (!bestInfeasible || score < bestInfeasible.score) {
       bestInfeasible = { a, score };
     }
@@ -105,8 +194,8 @@ export function solveChainStringAngles(
   let bestFeasible = null;
   let bestInfeasible = null;
 
-  for (let pa = parent.minRot; pa <= parent.maxRot; pa += 0.5) {
-    for (let ca = child.minRot; ca <= child.maxRot; ca += 0.5) {
+  for (let pa = parent.minRot; pa <= parent.maxRot; pa += CHAIN_SOLVE_STEP) {
+    for (let ca = child.minRot; ca <= child.maxRot; ca += CHAIN_SOLVE_STEP) {
       const end = endAt(pa, ca);
       if (!end) continue;
       const dist = Math.hypot(end.x - finger.x, end.y - finger.y);
@@ -118,13 +207,13 @@ export function solveChainStringAngles(
         Math.abs(shortestAngleDelta(ca, child.hangAngle));
 
       if (dist <= stringLen + EPS) {
-        const score = grav * 1.0 + cont * 0.12;
+        const score = grav * 1.0 + cont * CONTINUITY_WEIGHT;
         if (!bestFeasible || score < bestFeasible.score) {
           bestFeasible = { parent: pa, child: ca, score };
         }
       } else {
         const overstretch = dist - stringLen;
-        const score = overstretch * 14 + grav * 0.1 + cont * 0.06;
+        const score = overstretch * 14 + grav * 0.1 + cont * CONTINUITY_WEIGHT * 0.35;
         if (!bestInfeasible || score < bestInfeasible.score) {
           bestInfeasible = { parent: pa, child: ca, score };
         }
@@ -137,6 +226,71 @@ export function solveChainStringAngles(
     return {
       parent: clamp(pick.parent, parent.minRot, parent.maxRot),
       child: clamp(pick.child, child.minRot, child.maxRot),
+    };
+  }
+  return {
+    parent: clamp(parent.hangAngle, parent.minRot, parent.maxRot),
+    child: clamp(child.hangAngle, child.minRot, child.maxRot),
+  };
+}
+
+/**
+ * 绷紧提线：末端孔朝指尖靠拢；若给定 stringLen，则尽量保持该线长（更长 = 孔位离指尖更远）。
+ * @param {number} [stringLen] 装配空间目标线长，0 表示尽量贴近指尖
+ * @param {{ continuityWeight?: number, localSearchDeg?: number, childContinuityScale?: number, parentContinuityScale?: number }} [opts]
+ */
+export function solveReachChainStringAngles(
+  finger,
+  parent,
+  child,
+  endAt,
+  stringLen = 0,
+  opts = {}
+) {
+  const continuityWeight = opts.continuityWeight ?? CONTINUITY_WEIGHT;
+  const localSearchDeg = opts.localSearchDeg ?? LOCAL_SEARCH_DEG;
+  const childContinuityScale = opts.childContinuityScale ?? 1;
+  const parentContinuityScale = opts.parentContinuityScale ?? 1;
+
+  const local = searchReachWindow(
+    finger,
+    parent,
+    child,
+    endAt,
+    stringLen,
+    clampRange(parent.prevAngle - localSearchDeg, parent.minRot, parent.maxRot),
+    clampRange(parent.prevAngle + localSearchDeg, parent.minRot, parent.maxRot),
+    clampRange(child.prevAngle - localSearchDeg, child.minRot, child.maxRot),
+    clampRange(child.prevAngle + localSearchDeg, child.minRot, child.maxRot),
+    continuityWeight,
+    childContinuityScale,
+    parentContinuityScale
+  );
+  if (local) {
+    return {
+      parent: clamp(local.parent, parent.minRot, parent.maxRot),
+      child: clamp(local.child, child.minRot, child.maxRot),
+    };
+  }
+
+  const full = searchReachWindow(
+    finger,
+    parent,
+    child,
+    endAt,
+    stringLen,
+    parent.minRot,
+    parent.maxRot,
+    child.minRot,
+    child.maxRot,
+    continuityWeight,
+    childContinuityScale,
+    parentContinuityScale
+  );
+  if (full) {
+    return {
+      parent: clamp(full.parent, parent.minRot, parent.maxRot),
+      child: clamp(full.child, child.minRot, child.maxRot),
     };
   }
   return {
