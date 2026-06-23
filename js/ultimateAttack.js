@@ -1,19 +1,10 @@
 const WINDUP_HOLD_SEC = 0.12;
 const IMPACT_FRAME_INDEX = 8;
-const FRAME_DURATIONS = [
-  0.08,
-  0.08,
-  0.08,
-  0.08,
-  0.02,
-  0.02,
-  0.02,
-  0.02,
-  0.4,
-  0.04,
-];
+const DURATION_SEC = 1.2;
+const FRAME_WEIGHTS = [0.08, 0.08, 0.08, 0.08, 0.02, 0.02, 0.02, 0.02, 0.4, 0.04];
+const weightSum = FRAME_WEIGHTS.reduce((acc, w) => acc + w, 0);
+const FRAME_DURATIONS = FRAME_WEIGHTS.map((w) => (w / weightSum) * DURATION_SEC);
 const FRAME_COUNT = FRAME_DURATIONS.length;
-const DURATION_SEC = FRAME_DURATIONS.reduce((sum, duration) => sum + duration, 0);
 
 function frameIndexAt(elapsed) {
   let time = 0;
