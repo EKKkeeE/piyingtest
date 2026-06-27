@@ -87,6 +87,9 @@ export class AttackFramePlayer {
     this.scale = 1;
     this.left = 0;
     this.top = 0;
+    this._visible = false;
+    this._shownFrameIndex = -1;
+    this._layoutKey = "";
     this._mountFrames();
   }
 
@@ -101,17 +104,24 @@ export class AttackFramePlayer {
       img.alt = "";
       img.draggable = false;
       img.className = "combo-frame-img";
-      img.style.display = "none";
+      img.style.width = `${SRC_W}px`;
+      img.style.height = `${SRC_H}px`;
+      img.style.visibility = "hidden";
+      img.decode?.().catch(() => {});
       this.layer.appendChild(img);
       this.frames.push(img);
     }
   }
 
   hide() {
+    if (!this._visible) return;
     this.layer?.classList.remove("active");
-    for (const frame of this.frames) {
-      frame.style.display = "none";
+    if (this._shownFrameIndex >= 0) {
+      this.frames[this._shownFrameIndex].style.visibility = "hidden";
     }
+    this._visible = false;
+    this._shownFrameIndex = -1;
+    this._layoutKey = "";
   }
 
   /**
@@ -122,8 +132,8 @@ export class AttackFramePlayer {
   show(frameIndex, root, stageRect) {
     if (!this.layer || !stageRect || !this.frames.length) return;
 
-    this.frameIndex = Math.max(0, Math.min(FRAME_PATHS.length - 1, frameIndex));
-    const points = FRAME_POINTS[this.frameIndex];
+    const idx = Math.max(0, Math.min(FRAME_PATHS.length - 1, frameIndex));
+    const points = FRAME_POINTS[idx];
     const rootStage = {
       x: stageRect.width / 2 + (root?.x ?? 0),
       y: stageRect.height / 2 + (root?.y ?? 0),
@@ -134,19 +144,31 @@ export class AttackFramePlayer {
     const scale = Math.min(BASE_FRAME_SCALE, fitScale * 0.92);
     const left = rootStage.x - points.anchor.x * scale;
     const top = rootStage.y - points.anchor.y * scale;
+    const layoutKey = `${idx}|${left}|${top}|${scale}`;
 
+    if (this._visible && layoutKey === this._layoutKey) return;
+
+    const transform = `translate(${left}px, ${top}px) scale(${scale})`;
+
+    if (this._shownFrameIndex !== idx) {
+      if (this._shownFrameIndex >= 0) {
+        this.frames[this._shownFrameIndex].style.visibility = "hidden";
+      }
+      const frame = this.frames[idx];
+      frame.style.transform = transform;
+      frame.style.visibility = "visible";
+      this._shownFrameIndex = idx;
+    } else {
+      this.frames[idx].style.transform = transform;
+    }
+
+    this.frameIndex = idx;
     this.scale = scale;
     this.left = left;
     this.top = top;
     this.rect = stageRect;
-
-    for (let i = 0; i < this.frames.length; i++) {
-      const frame = this.frames[i];
-      frame.style.width = `${SRC_W * scale}px`;
-      frame.style.height = `${SRC_H * scale}px`;
-      frame.style.transform = `translate(${left}px, ${top}px)`;
-      frame.style.display = i === this.frameIndex ? "block" : "none";
-    }
+    this._layoutKey = layoutKey;
+    this._visible = true;
     this.layer.classList.add("active");
   }
 
@@ -166,6 +188,20 @@ export class AttackFramePlayer {
 
   getHitPoints(frameIndex = this.frameIndex) {
     return [this.getPoint(frameIndex, "hit"), this.getPoint(frameIndex, "tip")].filter(Boolean);
+  }
+
+  /** 受击判定点：与画面上帧动画角色躯干对齐 */
+  getBodyStage(frameIndex = this.frameIndex) {
+    if (!this._visible) return null;
+    const keys = ["head", "leftHand", "rightHand", "leftFoot", "rightFoot"];
+    const points = keys
+      .map((key) => this.getPoint(frameIndex, key))
+      .filter(Boolean);
+    if (!points.length) return null;
+    return {
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+    };
   }
 
   /**

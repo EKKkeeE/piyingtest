@@ -1,6 +1,7 @@
-﻿import { PuppetRig } from "./puppetRig.js";
+import { PuppetRig } from "./puppetRig.js";
 import { FingerMarionette } from "./fingerMarionette.js";
 import { StringLines } from "./stringLines.js";
+import { buildAllCeilingStrings } from "./puppetCeilingStrings.js";
 import { LayoutCache } from "./layoutCache.js";
 import { createHandDetector, TARGET_DETECT_FPS } from "./handDetect.js";
 import { CurtainAnimation } from "./curtainAnimation.js";
@@ -11,7 +12,9 @@ import { AttackFramePlayer } from "./attackFramePlayer.js";
 import { UltimateAttack } from "./ultimateAttack.js";
 import { UltimateFramePlayer } from "./ultimateFramePlayer.js";
 import { EnemySoldier } from "./enemySoldier.js";
+import { EnemySwordQiManager } from "./enemySwordQi.js";
 import { BossAI } from "./bossAI.js";
+import { BossGhostFireManager } from "./bossGhostFire.js";
 import { ResultParticles } from "./resultParticles.js";
 import {
   detectOkSignFromResult,
@@ -25,6 +28,8 @@ const MAX_SIM_STEPS = 3;
 const DEBUG =
   new URLSearchParams(location.search).has("debug") ||
   new URLSearchParams(location.search).has("d");
+/** 开发阶段：显示「直进 Boss」调试按钮，上线前设为 false 并删除相关代码 */
+const DEV_BOSS_SKIP_BTN = true;
 const USE_GPU = !new URLSearchParams(location.search).has("cpu");
 /** MediaPipe 是否成功启用 GPU 推理 */
 let gpuHandEnabled = false;
@@ -64,6 +69,7 @@ const els = {
   resultOverlay: document.getElementById("result-overlay"),
   resultCard: document.querySelector(".result-card"),
   resultVictoryText: document.getElementById("result-victory-text"),
+  resultDefeatText: document.getElementById("result-defeat-text"),
   resultTitle: document.getElementById("result-title"),
   resultParticlesCanvas: document.getElementById("result-particles"),
   restartBtn: document.getElementById("restart-btn"),
@@ -90,6 +96,7 @@ const els = {
   ),
   stage: document.getElementById("stage"),
   stageCurtain: document.getElementById("stage-curtain"),
+  devBossSkipBtn: document.getElementById("dev-boss-skip-btn"),
 };
 
 /** @type {CurtainAnimation | null} */
@@ -113,6 +120,8 @@ let enemySoldiers = [];
 let enemySpawnCount = 0;
 let enemySpawnTimer = 0;
 let enemyNextSpawnInterval = 0;
+/** @type {EnemySwordQiManager | null} */
+let enemySwordQi = null;
 const ENEMY_SPAWN_INTERVAL_MIN_SEC = 1.5;
 const ENEMY_SPAWN_INTERVAL_MAX_SEC = 3;
 const ENEMY_MAX_SPAWNS = 10;
@@ -121,23 +130,24 @@ const PLAYER_MAX_HP = 200;
 const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
 const PLAYER_IFRAME_SEC = 0.8;
-const BOSS_DAMAGE_PER_HIT = 10;
 const BOSS_HIT_RADIUS = 90;
-const BOSS_ATTACK_RADIUS = 85;
 const BOSS_Y_OFFSET = 48;
 const BOSS_INTRO_DURATION = 3;
 const BOSS_DEATH_ANIMATION_MS = 1400;
+const PLAYER_DEATH_ANIMATION_MS = 1400;
 const ATTACKS_PER_GOLDEN_PILL = 4;
 const MAX_GOLDEN_PILLS = 3;
 let playerHp = PLAYER_MAX_HP;
 let playerIFrame = 0;
 let bossHp = BOSS_MAX_HP;
-let bossAttackCooldown = 0;
 let bossIntroTimer = 0;
 let bossPhase = "minions";
 let bossDeathSequenceRunning = false;
+let playerDeathSequenceRunning = false;
 /** @type {BossAI | null} */
 let bossAI = null;
+/** @type {BossGhostFireManager | null} */
+let bossGhostFires = null;
 let goldenPills = 0;
 let goldenAttackCount = 0;
 let goldenPillSlots = [];
@@ -253,13 +263,71 @@ function clearBossIntroEffects() {
   els.puppetMountBoss?.classList.remove("boss-entering");
 }
 
+function updateDevBossSkipBtn() {
+  if (!DEV_BOSS_SKIP_BTN || !els.devBossSkipBtn) return;
+  const inBoss = bossPhase === "boss" || bossPhase === "bossIntro";
+  const ended = bossPhase === "defeated";
+  els.devBossSkipBtn.hidden = false;
+  els.devBossSkipBtn.classList.toggle("active", inBoss);
+  els.devBossSkipBtn.setAttribute("aria-pressed", inBoss ? "true" : "false");
+  els.devBossSkipBtn.textContent = inBoss
+    ? "Boss 环节中"
+    : ended
+      ? "Boss 已结束"
+      : "调试：直进 Boss";
+  els.devBossSkipBtn.disabled = inBoss || ended;
+}
+
+/** 开发用：跳过小怪与登场动画，直接进入 Boss 战 */
+function skipToBossPhase() {
+  if (!running || !bossRig) return;
+  if (bossPhase === "boss" || bossPhase === "bossIntro" || bossPhase === "defeated") {
+    return;
+  }
+
+  enemySwordQi?.clear();
+  if (els.enemyLayer) {
+    els.enemyLayer.innerHTML = "";
+  }
+  enemySoldiers = [];
+  enemySpawnCount = ENEMY_MAX_SPAWNS;
+  enemySpawnTimer = 0;
+
+  clearBossIntroEffects();
+  bossHp = BOSS_MAX_HP;
+  bossIntroTimer = 0;
+  bossDeathSequenceRunning = false;
+  bossGhostFires?.clear();
+  bossAI = null;
+  updateBossHp();
+
+  if (els.puppetMountBoss) {
+    els.puppetMountBoss.hidden = false;
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+  }
+  bossRig.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
+  for (const name of Object.keys(bossRig.parts)) {
+    bossRig.setBoneRotation(name, 0);
+  }
+  bossRig.update(0, { direct: true });
+
+  bossPhase = "boss";
+  bossAI = new BossAI(bossRig, () => playerRig, spawnBossGhostFire);
+  bossAI.reset(getBossHomeX(), BOSS_Y_OFFSET);
+
+  if (els.bossHudBlock) {
+    els.bossHudBlock.hidden = false;
+  }
+  updateDevBossSkipBtn();
+}
+
 function resetBossBattle() {
   bossHp = BOSS_MAX_HP;
-  bossAttackCooldown = 0;
   bossIntroTimer = 0;
   bossPhase = "minions";
   bossDeathSequenceRunning = false;
   bossAI = null;
+  bossGhostFires?.clear();
   updateBossHp();
   clearBossIntroEffects();
   if (els.bossHudBlock) {
@@ -271,18 +339,25 @@ function resetBossBattle() {
   }
   bossRig?.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
   bossRig?.update(0, { direct: true });
+  updateDevBossSkipBtn();
 }
 
-function resetVictoryResultUI() {
+function resetResultUI() {
   resultParticles?.stop();
-  els.resultOverlay?.classList.remove("result-overlay--victory");
+  els.resultOverlay?.classList.remove("result-overlay--victory", "result-overlay--defeat");
   if (els.resultVictoryText) els.resultVictoryText.hidden = true;
+  if (els.resultDefeatText) els.resultDefeatText.hidden = true;
   if (els.resultOverlay) els.resultOverlay.hidden = true;
 }
 
+function resetVictoryResultUI() {
+  resetResultUI();
+}
+
 function showPlayerVictoryResult() {
-  resetVictoryResultUI();
+  resetResultUI();
   if (els.resultVictoryText) els.resultVictoryText.hidden = false;
+  if (els.resultDefeatText) els.resultDefeatText.hidden = true;
   if (els.restartBtn) els.restartBtn.textContent = "再试一次";
   if (els.resultOverlay) {
     els.resultOverlay.classList.add("result-overlay--victory");
@@ -291,13 +366,61 @@ function showPlayerVictoryResult() {
   resultParticles?.start(/** @type {HTMLElement} */ (els.resultCard));
 }
 
+function showPlayerDefeatResult() {
+  resetResultUI();
+  if (els.resultVictoryText) els.resultVictoryText.hidden = true;
+  if (els.resultDefeatText) els.resultDefeatText.hidden = false;
+  if (els.resultTitle) els.resultTitle.textContent = "白骨精胜";
+  if (els.restartBtn) els.restartBtn.textContent = "再试一次";
+  if (els.resultOverlay) {
+    els.resultOverlay.classList.add("result-overlay--defeat");
+    els.resultOverlay.hidden = false;
+  }
+}
+
 function damagePlayer(amount) {
-  if (playerHp <= 0 || playerIFrame > 0) return false;
+  if (
+    playerHp <= 0 ||
+    playerIFrame > 0 ||
+    playerDeathSequenceRunning ||
+    bossDeathSequenceRunning
+  ) {
+    return false;
+  }
   playerHp = Math.max(0, playerHp - amount);
   playerIFrame = PLAYER_IFRAME_SEC;
   playerRig?.flashHit();
   updatePlayerHp();
+  if (playerHp <= 0) {
+    runPlayerDeathSequence();
+  }
   return true;
+}
+
+async function runPlayerDeathSequence() {
+  if (playerDeathSequenceRunning) return;
+  playerDeathSequenceRunning = true;
+
+  running = false;
+  cancelAnimationFrame(animId);
+  enemySwordQi?.clear();
+  bossGhostFires?.clear();
+  clearUltimateEarthquake();
+  staffGlow?.clear?.();
+  attackFramePlayer?.hide();
+  ultimateFramePlayer?.hide();
+  els.puppetMountPlayer?.classList.remove("combo-active", "ultimate-active");
+  els.app?.classList.add("player-defeat-flash");
+  els.puppetMountPlayer?.classList.remove("player-defeated");
+  void els.puppetMountPlayer?.offsetWidth;
+  els.puppetMountPlayer?.classList.add("player-defeated");
+
+  await new Promise((resolve) =>
+    setTimeout(resolve, PLAYER_DEATH_ANIMATION_MS)
+  );
+
+  els.app?.classList.remove("player-defeat-flash");
+  showPlayerDefeatResult();
 }
 
 function damageBoss(amount) {
@@ -308,6 +431,7 @@ function damageBoss(amount) {
   if (bossHp <= 0) {
     bossPhase = "defeated";
     bossAI = null;
+    updateDevBossSkipBtn();
     runBossDeathSequence();
   }
   return true;
@@ -319,6 +443,7 @@ async function runBossDeathSequence() {
 
   running = false;
   cancelAnimationFrame(animId);
+  bossGhostFires?.clear();
   clearUltimateEarthquake();
   staffGlow?.clear?.();
   attackFramePlayer?.hide();
@@ -612,8 +737,8 @@ function startBossIntro() {
   if (!bossRig || bossPhase !== "minions") return;
   bossPhase = "bossIntro";
   bossHp = BOSS_MAX_HP;
-  bossAttackCooldown = 0;
   bossAI = null;
+  bossGhostFires?.clear();
   bossIntroTimer = BOSS_INTRO_DURATION;
   updateBossHp();
   if (els.bossHudBlock) {
@@ -634,6 +759,74 @@ function startBossIntro() {
     els.puppetMountBoss.classList.add("boss-entering");
   }
   applyBossIntroPose(0);
+  updateDevBossSkipBtn();
+}
+
+let currentPlayerHitContext = {
+  comboActive: false,
+  ultimateActive: false,
+  comboFrameIndex: 0,
+  ultimateFrameIndex: 0,
+};
+
+function setPlayerHitContext(context = {}) {
+  currentPlayerHitContext = { ...currentPlayerHitContext, ...context };
+}
+
+function getPlayerTorsoStage(stageRect) {
+  if (!stageRect) return null;
+
+  if (currentPlayerHitContext.ultimateActive && ultimateFramePlayer) {
+    const framePoint = ultimateFramePlayer.getBodyStage(
+      currentPlayerHitContext.ultimateFrameIndex
+    );
+    if (framePoint) return framePoint;
+  }
+
+  if (currentPlayerHitContext.comboActive && attackFramePlayer) {
+    const framePoint = attackFramePlayer.getBodyStage(
+      currentPlayerHitContext.comboFrameIndex
+    );
+    if (framePoint) return framePoint;
+  }
+
+  if (!playerRig) return null;
+  return (
+    playerRig.getJointStage("torso", "root", stageRect) ??
+    playerRig.getRootStage(stageRect)
+  );
+}
+
+function getBossGhostFireSpawns(stageRect) {
+  if (!bossRig || !stageRect) return [];
+  const slots = [
+    { part: "arm_l", joint: "wrist", launchAngleOffset: 0.78 },
+    { part: "arm_l", joint: "wrist", launchAngleOffset: 0.42 },
+    { part: "arm_r", joint: "wrist", launchAngleOffset: -0.36 },
+    { part: "arm_r", joint: "wrist", launchAngleOffset: -0.68 },
+  ];
+
+  const spawns = [];
+  for (const slot of slots) {
+    const point = bossRig.getJointStage(slot.part, slot.joint, stageRect);
+    if (!point) continue;
+    spawns.push({
+      x: point.x,
+      y: point.y,
+      launchAngleOffset: slot.launchAngleOffset,
+    });
+  }
+  return spawns;
+}
+
+function spawnBossGhostFire() {
+  const stageRect = layoutCache?.stageRect;
+  if (!stageRect || !bossRig || !bossGhostFires) return;
+  // 攻击姿态先写入 DOM，再读取挂点，避免鬼火从错误位置飞出
+  bossRig.update(0, { direct: true, idle: false });
+  const spawns = getBossGhostFireSpawns(stageRect);
+  if (!spawns.length) return;
+  bossGhostFires.spawnBurst(spawns, getPlayerTorsoStage(stageRect));
 }
 
 function finishBossIntro() {
@@ -641,13 +834,13 @@ function finishBossIntro() {
   bossPhase = "boss";
   clearBossIntroEffects();
   bossHp = BOSS_MAX_HP;
-  bossAttackCooldown = 0;
   updateBossHp();
   if (els.bossHudBlock) {
     els.bossHudBlock.hidden = false;
   }
-  bossAI = new BossAI(bossRig, () => playerRig);
+  bossAI = new BossAI(bossRig, () => playerRig, spawnBossGhostFire);
   bossAI.reset(getBossHomeX(), BOSS_Y_OFFSET);
+  updateDevBossSkipBtn();
 }
 
 function updateBossBattle(dt, stageRect) {
@@ -664,30 +857,23 @@ function updateBossBattle(dt, stageRect) {
   }
   if (bossPhase !== "boss" || !bossAI || !bossRig || !stageRect) return;
 
-  bossAttackCooldown = Math.max(0, bossAttackCooldown - dt);
   bossAI.update(dt, stageRect);
 
-  if (!bossAI.canDealDamage || bossAttackCooldown > 0) return;
-  const playerTorso =
-    playerRig?.getJointStage("torso", "root", stageRect) ??
-    playerRig?.getRootStage(stageRect);
-  if (!playerTorso) return;
-
-  const bossRoot = bossRig.getRootStage(stageRect);
-  const bossWrist = bossRig.getHitPoint("arm_l", "wrist", stageRect, {
-    x: 0,
-    y: 0,
-  });
-  const bossHit =
-    (bossRoot && dist(bossRoot, playerTorso) <= BOSS_ATTACK_RADIUS) ||
-    (bossWrist && dist(bossWrist, playerTorso) <= BOSS_ATTACK_RADIUS);
-  if (bossHit && damagePlayer(BOSS_DAMAGE_PER_HIT)) {
-    bossAttackCooldown = 1;
-  }
+  const playerTorso = getPlayerTorsoStage(stageRect);
+  bossGhostFires?.update(dt, playerTorso, damagePlayer);
 }
 
 function restartBattle() {
-  resetVictoryResultUI();
+  resetResultUI();
+  playerDeathSequenceRunning = false;
+  els.app?.classList.remove("player-defeat-flash");
+  els.puppetMountPlayer?.classList.remove("player-defeated");
+  setPlayerHitContext({
+    comboActive: false,
+    ultimateActive: false,
+    comboFrameIndex: 0,
+    ultimateFrameIndex: 0,
+  });
   curtainAnim?.snapOpen();
   clearUltimateEarthquake();
   attackFramePlayer?.hide();
@@ -712,6 +898,7 @@ function restartBattle() {
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
   ensureEnemySpawned();
+  updateDevBossSkipBtn();
 }
 
 function applyPlayerAttackDamage(hitPoints, damage) {
@@ -739,6 +926,10 @@ function applyUltimateAttackDamage(hitPoint) {
   }
 }
 
+function spawnEnemySwordQi(origin, target) {
+  enemySwordQi?.spawn(origin, target);
+}
+
 function spawnEnemy() {
   if (
     !els.enemyLayer ||
@@ -752,7 +943,7 @@ function spawnEnemy() {
     els.stageInteraction?.getBoundingClientRect?.() ??
     null;
   if (!stageRect?.width || !stageRect?.height) return;
-  const enemy = new EnemySoldier(els.enemyLayer);
+  const enemy = new EnemySoldier(els.enemyLayer, spawnEnemySwordQi);
   enemy.spawn(stageRect);
   enemySoldiers.push(enemy);
   enemySpawnCount += 1;
@@ -767,6 +958,7 @@ function randomEnemySpawnInterval() {
 }
 
 function resetEnemyBattle() {
+  enemySwordQi?.clear();
   enemySoldiers = [];
   enemySpawnCount = 0;
   enemySpawnTimer = 0;
@@ -791,28 +983,11 @@ function updateEnemy(dt, stageRect) {
       spawnEnemy();
     }
   }
-  const playerTorso =
-    stageRect && playerRig
-      ? playerRig.getJointStage("torso", "root", stageRect) ??
-        playerRig.getRootStage(stageRect)
-      : null;
+  const playerTorso = getPlayerTorsoStage(stageRect);
   for (const enemy of enemySoldiers) {
     enemy.update(dt, playerTorso);
   }
-}
-
-function applyEnemyAttackDamage(stageRect) {
-  if (!stageRect || !playerRig || playerHp <= 0 || playerIFrame > 0) return;
-  const playerTorso =
-    playerRig.getJointStage("torso", "root", stageRect) ??
-    playerRig.getRootStage(stageRect);
-  if (!playerTorso) return;
-  for (const enemy of activeEnemies()) {
-    if (enemy.tryHitPlayerStagePoint?.(playerTorso)) {
-      damagePlayer(PLAYER_DAMAGE_PER_HIT);
-      return;
-    }
-  }
+  enemySwordQi?.update(dt, playerTorso, damagePlayer);
 }
 
 function loop(ts) {
@@ -847,19 +1022,8 @@ function loop(ts) {
     }
 
     const pose = lastPose;
-    playerRig.update(SIM_DT, {
-      idle: !pose?.hasHand,
-      direct: true,
-      alpha: pose?.hasHand ? 0.45 : 0.12,
-    });
 
     const stageRect = layoutCache.stageRect;
-    if (stageRect) {
-      ensureEnemySpawned();
-      updateEnemy(frameDt, stageRect);
-      applyEnemyAttackDamage(stageRect);
-      updateBossBattle(frameDt, stageRect);
-    }
 
     const cachedHand = handDetector.getCached();
     const okSign = detectOkSignFromResult(cachedHand);
@@ -882,6 +1046,22 @@ function loop(ts) {
         });
 
     const comboActive = !!combo?.active;
+    const frameAnimActive = comboActive || ultimateActive;
+
+    if (frameAnimActive) {
+      playerRig.update(SIM_DT, {
+        idle: !pose?.hasHand,
+        direct: true,
+        alpha: pose?.hasHand ? 0.45 : 0.12,
+        skipDom: true,
+      });
+    } else {
+      playerRig.update(SIM_DT, {
+        idle: !pose?.hasHand,
+        direct: true,
+        alpha: pose?.hasHand ? 0.45 : 0.12,
+      });
+    }
     els.puppetMountPlayer?.classList.toggle("combo-active", comboActive);
     els.puppetMountPlayer?.classList.toggle("ultimate-active", ultimateActive);
     els.app?.classList.toggle(
@@ -925,6 +1105,19 @@ function loop(ts) {
       attackFramePlayer?.hide();
     }
 
+    setPlayerHitContext({
+      comboActive,
+      ultimateActive,
+      comboFrameIndex: combo?.frameIndex ?? 0,
+      ultimateFrameIndex: ultimate?.frameIndex ?? 0,
+    });
+
+    if (stageRect) {
+      ensureEnemySpawned();
+      updateEnemy(frameDt, stageRect);
+      updateBossBattle(frameDt, stageRect);
+    }
+
     const strings = ultimateActive
       ? ultimateFramePlayer?.buildStrings(
           pose.fingerNodes ?? [],
@@ -946,6 +1139,12 @@ function loop(ts) {
       fingerNodes: [],
       strings: strings.length ? strings : pose.strings ?? [],
       handSkeleton,
+      ceilingStrings: buildAllCeilingStrings({
+        bossRig,
+        enemies: enemySoldiers,
+        stageRect,
+        bossPhase,
+      }),
     });
 
     if (stageRect) {
@@ -983,6 +1182,17 @@ async function initPuppet() {
     els.puppetMountPlayer
   );
   layoutCache.refresh(true);
+
+  if (!bossGhostFires) {
+    bossGhostFires = new BossGhostFireManager(els.enemyLayer);
+  } else {
+    bossGhostFires.clear();
+  }
+  if (!enemySwordQi) {
+    enemySwordQi = new EnemySwordQiManager(els.enemyLayer);
+  } else {
+    enemySwordQi.clear();
+  }
 
   initSpawnPositions();
 
@@ -1067,6 +1277,7 @@ async function startExperience() {
     bgm.scheduleStart(3000);
     await curtainAnim?.play();
     ensureEnemySpawned();
+    updateDevBossSkipBtn();
     if (DEBUG) {
       document.getElementById("camera-panel")?.classList.add("debug-on");
     }
@@ -1082,6 +1293,7 @@ async function startExperience() {
 
 els.startBtn?.addEventListener("click", startExperience);
 els.restartBtn?.addEventListener("click", restartBattle);
+els.devBossSkipBtn?.addEventListener("click", skipToBossPhase);
 
 if (els.stageCurtain) {
   curtainAnim = new CurtainAnimation(els.stageCurtain);

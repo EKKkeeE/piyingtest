@@ -27,9 +27,14 @@ export class StringLines {
     ctx.clearRect(0, 0, this._w, this._h);
 
     const strings = payload.strings ?? [];
+    const ceilingStrings = payload.ceilingStrings ?? [];
     const handSkeleton = payload.handSkeleton ?? { landmarks: [], connections: [] };
 
     this._drawHandSkeleton(ctx, handSkeleton);
+
+    for (const s of ceilingStrings) {
+      this._drawCeilingString(ctx, s);
+    }
 
     for (const s of strings) {
       const finger = s.fingerPt ?? s.finger;
@@ -58,6 +63,32 @@ export class StringLines {
       ctx.fillStyle = "rgba(255, 255, 255, 0.32)";
       ctx.fill();
     }
+  }
+
+  _drawCeilingString(ctx, s) {
+    const anchor = s.anchor;
+    const joint = s.joint;
+    if (!anchor || !joint) return;
+
+    ctx.beginPath();
+    ctx.moveTo(anchor.x, anchor.y);
+    ctx.lineTo(joint.x, joint.y);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.78)";
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(anchor.x, anchor.y, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(joint.x, joint.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.fill();
   }
 
   clear() {

@@ -394,6 +394,7 @@ export class PuppetRig {
   update(dt, opts = {}) {
     const idle = opts.idle ?? false;
     const direct = opts.direct ?? false;
+    const skipDom = opts.skipDom ?? false;
     const alpha = opts.alpha ?? (idle ? 0.1 : 0.18);
     const maxDelta = idle ? 14 : 22;
 
@@ -408,6 +409,8 @@ export class PuppetRig {
         this.displayRotations[name] = smoothAngle(cur, tgt, alpha, maxDelta);
       }
     }
+
+    if (skipDom) return;
 
     const [ax, ay] = this.rootAnchor;
 

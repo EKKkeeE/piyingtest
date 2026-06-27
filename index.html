@@ -94,14 +94,28 @@
         <canvas id="debug-canvas" class="debug-canvas"></canvas>
       </div>
 
+      <!-- DEV: 上线前删除 -->
+      <button
+        id="dev-boss-skip-btn"
+        type="button"
+        class="dev-boss-skip-btn"
+        hidden
+        aria-pressed="false"
+      >
+        调试：直进 Boss
+      </button>
+
       <div id="result-overlay" class="result-overlay" hidden>
         <canvas id="result-particles" class="result-particles" aria-hidden="true"></canvas>
-        <div class="result-card">
+        <div class="result-card puppet-frame">
           <div id="result-victory-text" class="result-victory-text" hidden>
             <h2 class="result-main-title">演出完美结束！</h2>
             <p class="result-subtitle">
               恭喜获得称号：<span class="result-title-badge">金牌皮影演绎家</span>！
             </p>
+          </div>
+          <div id="result-defeat-text" class="result-defeat-text" hidden>
+            <p class="result-subtitle">悟空败下阵来，皮影戏台归于沉寂……</p>
           </div>
           <h2 id="result-title">白骨精胜</h2>
           <button id="restart-btn" type="button">再试一次</button>
@@ -109,9 +123,12 @@
       </div>
 
       <div id="start-overlay" class="start-overlay">
-        <div class="start-card">
-          <h1>手势皮影 · 孙悟空</h1>
-          <p class="tips">举起<strong>左手</strong>：移动掌心走位，五指牵动头与四肢</p>
+        <div class="start-card puppet-frame">
+          <div class="start-card-header">
+            <span class="start-card-ornament" aria-hidden="true"></span>
+            <h1>手势皮影 · 孙悟空</h1>
+          </div>
+          <p class="tips">利用<strong>比耶</strong>攻击，<strong>OK</strong>释放大招</p>
           <button id="start-btn" type="button">举起左手，开始演出</button>
           <p id="error-box" class="error-box" hidden></p>
         </div>

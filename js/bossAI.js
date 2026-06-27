@@ -1,48 +1,48 @@
 /** 待机多久后发动下一次攻击（秒，含上下界） */
 const IDLE_WAIT = { min: 3, max: 5 };
-const FLY_DURATION = 1.1;
-const RECOVER_DURATION = 0.6;
-const FLY_SPEED = 5.5;
-const RECOVER_SPEED = 3.5;
-/** 飞到主角身前停下（相对主角 root 的 X 偏移，正值=更靠右） */
-const FLY_STOP_AHEAD = 72;
+const CAST_DURATION = 1.15;
+const CAST_WINDUP = 0.34;
+const RECOVER_DURATION = 0.65;
 
-/** 白骨精 flipX=true：左臂负角、右臂正角才能视觉上张开 */
+/** 白骨精 flipX=true：左臂正角、右臂负角才能视觉上张开 */
 const POSE = {
   idle: { arm_l: 0, arm_r: 0, torso: 0 },
-  spread: { arm_l: -82, arm_r: 48, torso: -8 },
-  recover: { arm_l: -12, arm_r: 8, torso: 0 },
+  spread: { arm_l: 112, arm_r: -72, torso: 16 },
 };
 
 function randomIdleWait() {
   return IDLE_WAIT.min + Math.random() * (IDLE_WAIT.max - IDLE_WAIT.min);
 }
 
+function easeOutCubic(t) {
+  const x = Math.max(0, Math.min(1, t));
+  return 1 - (1 - x) ** 3;
+}
+
+function lerpPose(a, b, t) {
+  const k = Math.max(0, Math.min(1, t));
+  return {
+    arm_l: a.arm_l + (b.arm_l - a.arm_l) * k,
+    arm_r: a.arm_r + (b.arm_r - a.arm_r) * k,
+    torso: a.torso + (b.torso - a.torso) * k,
+  };
+}
+
 /**
  * @param {import('./puppetRig.js').PuppetRig} bossRig
  * @param {() => import('./puppetRig.js').PuppetRig} getPlayerRig
+ * @param {() => void} [onAttack]
  */
 export class BossAI {
-  constructor(bossRig, getPlayerRig) {
+  constructor(bossRig, getPlayerRig, onAttack) {
     this.bossRig = bossRig;
     this.getPlayerRig = getPlayerRig;
+    this.onAttack = onAttack ?? null;
     this.state = "idle";
     this.timer = randomIdleWait();
     this.homeX = 0;
     this.homeY = 0;
-    this.canDealDamage = false;
-  }
-
-  /**
-   * 与玩家 puppet 使用同一套 rootExtra 坐标（相对舞台中心像素）
-   * @param {DOMRect} stageRect
-   */
-  _playerRootX(stageRect) {
-    const player = this.getPlayerRig();
-    if (!player) return 0;
-    const root = player.getRootStage(stageRect);
-    if (root) return root.x - stageRect.width * 0.5;
-    return player.rootExtra?.x ?? 0;
+    this._fired = false;
   }
 
   _applyPose(pose, direct) {
@@ -61,7 +61,7 @@ export class BossAI {
     this.homeY = homeY;
     this.state = "idle";
     this.timer = randomIdleWait();
-    this.canDealDamage = false;
+    this._fired = false;
     this.bossRig.setRootTransform(homeX, homeY, 0);
     for (const name of Object.keys(this.bossRig.parts)) {
       this.bossRig.setBoneRotation(name, 0);
@@ -71,7 +71,7 @@ export class BossAI {
 
   /** @returns {boolean} */
   isAttacking() {
-    return this.state === "fly";
+    return this.state === "cast";
   }
 
   /**
@@ -79,44 +79,45 @@ export class BossAI {
    * @param {DOMRect} stageRect
    */
   update(dt, stageRect) {
+    void stageRect;
     this.timer -= dt;
-    const playerRootX = this._playerRootX(stageRect);
-    const flyTargetX = playerRootX + FLY_STOP_AHEAD;
 
     switch (this.state) {
       case "idle":
-        this.canDealDamage = false;
         this._applyPose(POSE.idle, false);
+        this.bossRig.setRootTransform(this.homeX, this.homeY, 0);
         if (this.timer <= 0) {
-          this.state = "fly";
-          this.timer = FLY_DURATION;
-          this._applyPose(POSE.spread, true);
+          this.state = "cast";
+          this.timer = CAST_DURATION;
+          this._fired = false;
         }
         break;
 
-      case "fly": {
-        this.canDealDamage = true;
-        this._applyPose(POSE.spread, true);
-        const cur = this.bossRig.rootExtra;
-        const nextX = cur.x + (flyTargetX - cur.x) * Math.min(1, dt * FLY_SPEED);
-        const clampedX = Math.max(flyTargetX, Math.min(this.homeX, nextX));
-        this.bossRig.setRootTransform(clampedX, this.homeY, -6);
-        const reached = Math.abs(clampedX - flyTargetX) < 28;
-        if (this.timer <= 0 || reached) {
+      case "cast": {
+        const elapsed = CAST_DURATION - this.timer;
+        const spreadT = easeOutCubic(Math.min(1, elapsed / CAST_WINDUP));
+        const pose = lerpPose(POSE.idle, POSE.spread, spreadT);
+        this._applyPose(pose, spreadT >= 0.92);
+
+        if (!this._fired && elapsed >= CAST_WINDUP) {
+          this._fired = true;
+          this._applyPose(POSE.spread, true);
+          this.onAttack?.();
+        }
+
+        this.bossRig.setRootTransform(this.homeX, this.homeY, -8 * spreadT);
+        if (this.timer <= 0) {
           this.state = "recover";
           this.timer = RECOVER_DURATION;
         }
         break;
       }
 
-      case "recover":
-        this.canDealDamage = false;
-        this._applyPose(POSE.recover, false);
-        {
-          const cur = this.bossRig.rootExtra;
-          const nextX = cur.x + (this.homeX - cur.x) * Math.min(1, dt * RECOVER_SPEED);
-          this.bossRig.setRootTransform(nextX, this.homeY, 0);
-        }
+      case "recover": {
+        const recoverT = easeOutCubic(1 - this.timer / RECOVER_DURATION);
+        const pose = lerpPose(POSE.spread, POSE.idle, recoverT);
+        this._applyPose(pose, false);
+        this.bossRig.setRootTransform(this.homeX, this.homeY, -8 * (1 - recoverT));
         if (this.timer <= 0) {
           this.state = "idle";
           this.timer = randomIdleWait();
@@ -124,16 +125,17 @@ export class BossAI {
           this._applyPose(POSE.idle, false);
         }
         break;
+      }
 
       default:
         this.state = "idle";
         this.timer = randomIdleWait();
     }
 
-    const animDirect = this.state === "fly";
+    const casting = this.state === "cast";
     this.bossRig.update(dt, {
-      direct: animDirect,
-      alpha: animDirect ? 0.85 : 0.35,
+      direct: casting,
+      alpha: casting ? 0.88 : 0.35,
       idle: false,
     });
   }

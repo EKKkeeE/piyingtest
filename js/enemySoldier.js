@@ -7,9 +7,9 @@ const BODY = { x: -191, y: -620 };
  */
 const BODY_JOINTS = {
   shoulder_l: [54, 248],
-  shoulder_r: [324, 304],
-  hip_l: [120, 605],
-  hip_r: [246, 605],
+  shoulder_r: [321, 338],
+  hip_l: [120, 535],
+  hip_r: [246, 535],
 };
 
 /** 各部件贴图内挂点（孔位或肩甲下缘） */
@@ -34,7 +34,7 @@ const PARTS = {
     height: 650,
     x: BODY.x,
     y: BODY.y,
-    z: 3,
+    z: 5,
   },
   legBack: {
     src: "assets/minion/leg_back.png",
@@ -50,7 +50,7 @@ const PARTS = {
     height: 303,
     ...partPos(PART_ATTACH.legFront, BODY_JOINTS.hip_r),
     origin: PART_ATTACH.legFront,
-    z: 4,
+    z: 2,
   },
   armSword: {
     src: "assets/minion/arm_sword.png",
@@ -58,7 +58,7 @@ const PARTS = {
     height: 519,
     ...partPos(PART_ATTACH.armSword, BODY_JOINTS.shoulder_l),
     origin: PART_ATTACH.armSword,
-    z: 2,
+    z: 3,
   },
   armFree: {
     src: "assets/minion/arm_free.png",
@@ -66,33 +66,97 @@ const PARTS = {
     height: 348,
     ...partPos(PART_ATTACH.armFree, BODY_JOINTS.shoulder_r),
     origin: PART_ATTACH.armFree,
-    z: 5,
+    z: 4,
   },
 };
 
 const MAX_HP = 20;
-const ATTACK_INTERVAL_SEC = 1;
-const ATTACK_DURATION_SEC = 0.34;
-const WALK_SPEED = 70;
-const WALK_SWING_SPEED = 5;
+const ATTACK_INTERVAL_SEC = 1.2;
+const ATTACK_DURATION_SEC = 0.42;
+const ATTACK_QI_RELEASE = 0.36;
+const SWORD_PIVOT = PART_ATTACH.armSword;
+/** 刀尖在 arm_sword 贴图局部坐标中的近似位置 */
+const SWORD_TIP = [58, 462];
+const STAND_DELAY_SEC = 0.45;
+const WALK_SPEED = 85;
+const WALK_SWING_SPEED = 6.5;
 const HIT_ZONE = { w: 250, h: 405 };
-const ATTACK_HIT_RANGE = { minAhead: 20, maxAhead: 210, y: 420 };
-const ATTACK_TRIGGER_RANGE = { minAhead: 80, maxAhead: 175, y: 450 };
-const ATTACK_IMPACT_START = 0.35;
-const ATTACK_IMPACT_END = 0.72;
+const ANCHOR_REACH_DIST = 6;
+
+/** 吊线挂点：部件贴图局部坐标（头、双臂、双脚） */
+const MINION_STRING_ATTACH = [
+  { part: "body", local: [191, 118] },
+  { part: "armSword", local: [210, 300] },
+  { part: "armFree", local: [58, 260] },
+  { part: "legBack", local: [72, 296] },
+  { part: "legFront", local: [58, 300] },
+];
+
+function swordAttackDeg(progress) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p < 0.35) {
+    const t = p / 0.35;
+    return -18 + (65 - -18) * t;
+  }
+  if (p < 0.7) {
+    const t = (p - 0.35) / 0.35;
+    return 65 + (-105 - 65) * t;
+  }
+  const t = (p - 0.7) / 0.3;
+  return -105 + (-15 - -105) * t;
+}
+
+function attackFreeArmDeg(progress) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p < 0.35) return -24 + (p / 0.35) * 4;
+  if (p < 0.7) return -20 + ((p - 0.35) / 0.35) * 18;
+  return -2 - ((p - 0.7) / 0.3) * 14;
+}
+
+function attackBodyOffset(progress) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p < 0.35) {
+    const t = p / 0.35;
+    return { x: -t * 10, y: t * 6 };
+  }
+  if (p < 0.7) {
+    const t = (p - 0.35) / 0.35;
+    return { x: -10 + t * 26, y: 6 - t * 10 };
+  }
+  const t = (p - 0.7) / 0.3;
+  return { x: 16 - t * 16, y: -4 + t * 4 };
+}
+
+/** @param {DOMRect} stageRect */
+function pickStandAnchor(stageRect) {
+  const padX = Math.max(48, stageRect.width * 0.04);
+  const minX = stageRect.width * 0.52 + padX * 0.5;
+  const maxX = stageRect.width - padX;
+  const minY = stageRect.height * 0.58;
+  const maxY = stageRect.height * 0.92;
+  return {
+    x: minX + Math.random() * Math.max(1, maxX - minX),
+    y: minY + Math.random() * Math.max(1, maxY - minY),
+  };
+}
 
 export class EnemySoldier {
   /**
    * @param {HTMLElement | null} layer
+   * @param {(origin: { x: number, y: number }, target: { x: number, y: number }, swordDeg: number) => void} [onSpawnSwordQi]
    */
-  constructor(layer) {
+  constructor(layer, onSpawnSwordQi) {
     this.layer = layer;
+    this.onSpawnSwordQi = onSpawnSwordQi ?? null;
     this.root = null;
     this.parts = {};
     this.active = false;
     this.x = 0;
     this.y = 0;
-    this.targetX = 0;
+    this.anchorX = 0;
+    this.anchorY = 0;
+    this.phase = "move";
+    this.standTimer = 0;
     this.scale = 0.3;
     this.time = 0;
     this.speed = WALK_SPEED;
@@ -101,13 +165,16 @@ export class EnemySoldier {
     this.attackTimer = 0;
     this.attackElapsed = 0;
     this.attacking = false;
-    this.attackDamageDealt = false;
-    this.wasNearPlayer = false;
+    this.attackQiSpawned = false;
     this.walking = false;
     this.hpFill = null;
     this.assembly = null;
     this._hitTimer = 0;
     this._deathTimer = 0;
+    this._partRot = {};
+    this._displayBob = 0;
+    this._attackOffsetX = 0;
+    this._attackOffsetY = 0;
     this._mount();
   }
 
@@ -152,17 +219,24 @@ export class EnemySoldier {
   spawn(stageRect) {
     if (!this.root || !stageRect) return;
     this.scale = Math.min(0.36, Math.max(0.27, stageRect.height / 2700));
+    const anchor = pickStandAnchor(stageRect);
+    this.anchorX = anchor.x;
+    this.anchorY = anchor.y;
     this.x = stageRect.width + 70;
-    this.y = stageRect.height * 0.84;
-    this.targetX = -220;
+    this.y = this.anchorY;
+    this.phase = "move";
+    this.standTimer = 0;
     this.time = 0;
     this.hp = MAX_HP;
     this.attackTimer = 0;
     this.attackElapsed = 0;
     this.attacking = false;
-    this.attackDamageDealt = false;
-    this.wasNearPlayer = false;
+    this.attackQiSpawned = false;
     this.walking = false;
+    this._partRot = {};
+    this._displayBob = 0;
+    this._attackOffsetX = 0;
+    this._attackOffsetY = 0;
     this.active = true;
     clearTimeout(this._hitTimer);
     clearTimeout(this._deathTimer);
@@ -182,36 +256,57 @@ export class EnemySoldier {
     this.time += dt;
     this.walking = false;
 
-    if (this.attacking) {
+    if (this.phase === "move") {
+      const dx = this.anchorX - this.x;
+      if (Math.abs(dx) <= ANCHOR_REACH_DIST) {
+        this.x = this.anchorX;
+        this.y = this.anchorY;
+        this.phase = "stand";
+        this.standTimer = 0;
+        this.attackTimer = ATTACK_INTERVAL_SEC;
+      } else {
+        this.x += Math.sign(dx) * this.speed * dt;
+        this.walking = true;
+      }
+    } else if (this.phase === "attack") {
       this.attackElapsed += dt;
+      const progress = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
+      if (
+        !this.attackQiSpawned &&
+        progress >= ATTACK_QI_RELEASE &&
+        playerPoint &&
+        this.onSpawnSwordQi
+      ) {
+        this.attackQiSpawned = true;
+        const swordDeg = this.getSwordDegAt(ATTACK_QI_RELEASE);
+        this.onSpawnSwordQi(
+          this.getSwordQiOrigin(swordDeg),
+          { x: playerPoint.x, y: playerPoint.y },
+          swordDeg
+        );
+      }
       if (this.attackElapsed >= ATTACK_DURATION_SEC) {
+        this.phase = "stand";
         this.attacking = false;
         this.attackElapsed = 0;
-        this.attackDamageDealt = false;
-      }
-    } else {
-      const nearPlayer = this._isNearPlayer(playerPoint);
-      if (nearPlayer) {
-        if (!this.wasNearPlayer || this.attackTimer >= ATTACK_INTERVAL_SEC) {
-          this.attackTimer = 0;
-          this.attacking = true;
-          this.attackElapsed = 0;
-          this.attackDamageDealt = false;
-        } else {
-          this.attackTimer += dt;
-        }
-      } else {
+        this.attackQiSpawned = false;
         this.attackTimer = 0;
-        this.wasNearPlayer = false;
-        const center = this.getCenterStage();
-        const playerIsLeft = playerPoint && playerPoint.x < center.x;
-        if (playerIsLeft) {
-          this.x -= this.speed * dt;
-          this.walking = true;
-        }
+      }
+    } else if (this.phase === "stand") {
+      this.standTimer += dt;
+      this.attackTimer += dt;
+      if (
+        this.standTimer >= STAND_DELAY_SEC &&
+        this.attackTimer >= ATTACK_INTERVAL_SEC &&
+        playerPoint
+      ) {
+        this.phase = "attack";
+        this.attacking = true;
+        this.attackElapsed = 0;
+        this.attackQiSpawned = false;
+        this.attackTimer = 0;
       }
     }
-    this.wasNearPlayer = this._isNearPlayer(playerPoint);
 
     this._render();
   }
@@ -255,33 +350,31 @@ export class EnemySoldier {
     );
   }
 
-  tryHitPlayerStagePoint(point) {
-    if (!this.isAlive() || !this.attacking || this.attackDamageDealt || !point) {
-      return false;
-    }
-    const p = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
-    if (p < ATTACK_IMPACT_START || p > ATTACK_IMPACT_END) return false;
-    const center = this.getCenterStage();
-    const ahead = center.x - point.x;
-    const hit =
-      ahead >= ATTACK_HIT_RANGE.minAhead &&
-      ahead <= ATTACK_HIT_RANGE.maxAhead &&
-      Math.abs(point.y - center.y) <= ATTACK_HIT_RANGE.y;
-    if (hit) {
-      this.attackDamageDealt = true;
-    }
-    return hit;
+  getSwordDegAt(progress) {
+    return swordAttackDeg(progress);
   }
 
-  _isNearPlayer(point) {
-    if (!point) return false;
-    const center = this.getCenterStage();
-    const ahead = center.x - point.x;
-    return (
-      ahead >= ATTACK_TRIGGER_RANGE.minAhead &&
-      ahead <= ATTACK_TRIGGER_RANGE.maxAhead &&
-      Math.abs(point.y - center.y) <= ATTACK_TRIGGER_RANGE.y
-    );
+  _swordTipAssembly(swordDeg) {
+    const [ox, oy] = SWORD_PIVOT;
+    const rad = (swordDeg * Math.PI) / 180;
+    const lx = SWORD_TIP[0] - ox;
+    const ly = SWORD_TIP[1] - oy;
+    const rx = lx * Math.cos(rad) - ly * Math.sin(rad);
+    const ry = lx * Math.sin(rad) + ly * Math.cos(rad);
+    return {
+      x: PARTS.armSword.x + ox + rx,
+      y: PARTS.armSword.y + oy + ry,
+    };
+  }
+
+  getSwordQiOrigin(swordDeg = this.getSwordDegAt(ATTACK_QI_RELEASE)) {
+    const tip = this._swordTipAssembly(swordDeg);
+    const standing = this.phase === "stand" || this.phase === "attack";
+    const bob = standing ? Math.sin(this.time * 2.2) * 1.5 : 0;
+    return {
+      x: this.x + tip.x * this.scale,
+      y: this.y - bob + tip.y * this.scale,
+    };
   }
 
   getCenterStage() {
@@ -289,6 +382,35 @@ export class EnemySoldier {
       x: this.x,
       y: this.y - 150 * this.scale,
     };
+  }
+
+  _assemblyPoint(partName, localX, localY) {
+    const spec = PARTS[partName];
+    if (!spec) return { x: 0, y: 0 };
+    if (!spec.origin) {
+      return { x: spec.x + localX, y: spec.y + localY };
+    }
+    const [ox, oy] = spec.origin;
+    const deg = this._partRot[partName] ?? 0;
+    const rad = (deg * Math.PI) / 180;
+    const dx = localX - ox;
+    const dy = localY - oy;
+    return {
+      x: spec.x + ox + dx * Math.cos(rad) - dy * Math.sin(rad),
+      y: spec.y + oy + dx * Math.sin(rad) + dy * Math.cos(rad),
+    };
+  }
+
+  /** @returns {Array<{ x: number, y: number }>} */
+  getCeilingStringJoints() {
+    if (!this.isAlive()) return [];
+    return MINION_STRING_ATTACH.map(({ part, local }) => {
+      const pt = this._assemblyPoint(part, local[0], local[1]);
+      return {
+        x: this.x + this._attackOffsetX + pt.x * this.scale,
+        y: this.y - this._displayBob + this._attackOffsetY + pt.y * this.scale,
+      };
+    });
   }
 
   _updateHp() {
@@ -299,38 +421,46 @@ export class EnemySoldier {
 
   _render() {
     if (!this.root) return;
-    const walking = this.walking && !this.attacking;
+    const walking = this.walking;
+    const standing =
+      !walking && (this.phase === "stand" || this.phase === "attack");
     const step = Math.sin(this.time * WALK_SWING_SPEED);
-    const bob = walking ? Math.abs(step) * 7 : Math.sin(this.time * 2.2) * 2;
-    this.root.style.transform = `translate(${this.x}px, ${this.y - bob}px) scale(${this.scale})`;
-
-    if (this.attacking) {
+    const bob = walking
+      ? Math.abs(step) * 11
+      : standing
+        ? Math.sin(this.time * 2.2) * 2.5
+        : Math.sin(this.time * 2.2) * 3;
+    let attackOffsetX = 0;
+    let attackOffsetY = 0;
+    if (this.phase === "attack") {
       const p = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
-      let swordDeg;
-      if (p < 0.35) {
-        const t = p / 0.35;
-        swordDeg = -8 + (42 - -8) * t;
-      } else if (p < 0.7) {
-        const t = (p - 0.35) / 0.35;
-        swordDeg = 42 + (-78 - 42) * t;
-      } else {
-        const t = (p - 0.7) / 0.3;
-        swordDeg = -78 + (-8 - -78) * t;
-      }
-      this._rotate("legFront", 2);
-      this._rotate("legBack", -2);
+      const offset = attackBodyOffset(p);
+      attackOffsetX = offset.x;
+      attackOffsetY = offset.y;
+    }
+    this.root.style.transform = `translate(${this.x + attackOffsetX}px, ${this.y - bob + attackOffsetY}px) scale(${this.scale})`;
+    this._displayBob = bob;
+    this._attackOffsetX = attackOffsetX;
+    this._attackOffsetY = attackOffsetY;
+
+    if (this.phase === "attack") {
+      const p = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
+      const swordDeg = swordAttackDeg(p);
+      this._rotate("legFront", 10);
+      this._rotate("legBack", -10);
       this._rotate("armSword", swordDeg);
-      this._rotate("armFree", -5);
+      this._rotate("armFree", attackFreeArmDeg(p));
       return;
     }
 
-    this._rotate("legFront", walking ? 2 + step * 7 : 2);
-    this._rotate("legBack", walking ? -2 - step * 7 : -2);
-    this._rotate("armSword", walking ? -6 + step * 4 : -6);
-    this._rotate("armFree", walking ? -2 + step * 3 : -2);
+    this._rotate("legFront", walking ? 3 + step * 11 : 3);
+    this._rotate("legBack", walking ? -3 - step * 11 : -3);
+    this._rotate("armSword", walking ? -9 + step * 7 : -9);
+    this._rotate("armFree", walking ? -4 + step * 6 : -4);
   }
 
   _rotate(name, deg) {
+    this._partRot[name] = deg;
     const el = this.parts[name];
     if (!el) return;
     el.style.transform = `rotate(${deg}deg)`;

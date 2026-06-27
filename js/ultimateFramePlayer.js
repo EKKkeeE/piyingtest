@@ -115,6 +115,9 @@ export class UltimateFramePlayer {
     this.scale = 1;
     this.baseLeft = 0;
     this.baseTop = 0;
+    this._visible = false;
+    this._shownFrameIndex = -1;
+    this._layoutKey = "";
     this._mountFrames();
   }
 
@@ -128,17 +131,24 @@ export class UltimateFramePlayer {
       img.alt = "";
       img.draggable = false;
       img.className = "ultimate-frame-img";
-      img.style.display = "none";
+      img.style.width = `${frameData.width}px`;
+      img.style.height = `${frameData.height}px`;
+      img.style.visibility = "hidden";
+      img.decode?.().catch(() => {});
       this.layer.appendChild(img);
       this.frames.push(img);
     }
   }
 
   hide() {
+    if (!this._visible) return;
     this.layer?.classList.remove("active");
-    for (const frame of this.frames) {
-      frame.style.display = "none";
+    if (this._shownFrameIndex >= 0) {
+      this.frames[this._shownFrameIndex].style.visibility = "hidden";
     }
+    this._visible = false;
+    this._shownFrameIndex = -1;
+    this._layoutKey = "";
   }
 
   /**
@@ -149,8 +159,8 @@ export class UltimateFramePlayer {
   show(frameIndex, root, stageRect) {
     if (!this.layer || !stageRect || !this.frames.length) return;
 
-    this.frameIndex = Math.max(0, Math.min(FRAME_DATA.length - 1, frameIndex));
-    const currentFrame = FRAME_DATA[this.frameIndex];
+    const idx = Math.max(0, Math.min(FRAME_DATA.length - 1, frameIndex));
+    const data = FRAME_DATA[idx];
     const rootStage = {
       x: stageRect.width / 2 + (root?.x ?? 0),
       y: stageRect.height / 2 + (root?.y ?? 0),
@@ -159,20 +169,32 @@ export class UltimateFramePlayer {
     const scale = Math.min(BASE_FRAME_SCALE, fitScale * 0.95);
     const baseLeft = rootStage.x - FRAME_ANCHOR.x * scale;
     const baseTop = rootStage.y - FRAME_ANCHOR.y * scale;
+    const tx = baseLeft + data.offset.x * scale;
+    const ty = baseTop + data.offset.y * scale;
+    const layoutKey = `${idx}|${tx}|${ty}|${scale}`;
+
+    if (this._visible && layoutKey === this._layoutKey) return;
+
+    const transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+
+    if (this._shownFrameIndex !== idx) {
+      if (this._shownFrameIndex >= 0) {
+        this.frames[this._shownFrameIndex].style.visibility = "hidden";
+      }
+      const frame = this.frames[idx];
+      frame.style.transform = transform;
+      frame.style.visibility = "visible";
+      this._shownFrameIndex = idx;
+    } else {
+      this.frames[idx].style.transform = transform;
+    }
+
+    this.frameIndex = idx;
     this.scale = scale;
     this.baseLeft = baseLeft;
     this.baseTop = baseTop;
-
-    for (let i = 0; i < this.frames.length; i++) {
-      const frame = this.frames[i];
-      const data = FRAME_DATA[i] ?? currentFrame;
-      frame.style.width = `${data.width * scale}px`;
-      frame.style.height = `${data.height * scale}px`;
-      frame.style.transform = `translate(${
-        baseLeft + data.offset.x * scale
-      }px, ${baseTop + data.offset.y * scale}px)`;
-      frame.style.display = i === this.frameIndex ? "block" : "none";
-    }
+    this._layoutKey = layoutKey;
+    this._visible = true;
     this.layer.classList.add("active");
   }
 
@@ -211,5 +233,19 @@ export class UltimateFramePlayer {
 
   getHitPoint(frameIndex = IMPACT_FRAME_INDEX) {
     return this.getPoint(frameIndex, "hit");
+  }
+
+  /** 受击判定点：与画面上帧动画角色躯干对齐 */
+  getBodyStage(frameIndex = this.frameIndex) {
+    if (!this._visible) return null;
+    const keys = ["head", "leftHand", "rightHand", "leftFoot", "rightFoot"];
+    const points = keys
+      .map((key) => this.getPoint(frameIndex, key))
+      .filter(Boolean);
+    if (!points.length) return null;
+    return {
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+    };
   }
 }
