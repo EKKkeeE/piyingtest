@@ -122,10 +122,10 @@ let enemySpawnTimer = 0;
 let enemyNextSpawnInterval = 0;
 /** @type {EnemySwordQiManager | null} */
 let enemySwordQi = null;
-const ENEMY_SPAWN_INTERVAL_MIN_SEC = 1.5;
-const ENEMY_SPAWN_INTERVAL_MAX_SEC = 3;
+const ENEMY_SPAWN_INTERVAL_MIN_SEC = 3;
+const ENEMY_SPAWN_INTERVAL_MAX_SEC = 5;
 const ENEMY_MAX_SPAWNS = 10;
-const ENEMY_MAX_ACTIVE = 4;
+const ENEMY_MAX_ACTIVE = 3;
 const PLAYER_MAX_HP = 200;
 const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
