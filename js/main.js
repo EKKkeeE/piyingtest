@@ -131,6 +131,7 @@ const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
 const PLAYER_IFRAME_SEC = 0.8;
 const BOSS_HIT_RADIUS = 90;
+const BOSS_MELEE_DAMAGE = 18;
 const BOSS_Y_OFFSET = 48;
 const BOSS_INTRO_DURATION = 3;
 const BOSS_DEATH_ANIMATION_MS = 1400;
@@ -260,7 +261,7 @@ function clearBossIntroEffects() {
     els.bossIntroLayer.hidden = true;
     els.bossIntroLayer.classList.remove("active");
   }
-  els.puppetMountBoss?.classList.remove("boss-entering");
+  els.puppetMountBoss?.classList.remove("boss-entering", "boss-melee-glow");
 }
 
 function updateDevBossSkipBtn() {
@@ -303,7 +304,7 @@ function skipToBossPhase() {
 
   if (els.puppetMountBoss) {
     els.puppetMountBoss.hidden = false;
-    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering", "boss-melee-glow");
   }
   bossRig.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
   for (const name of Object.keys(bossRig.parts)) {
@@ -312,7 +313,7 @@ function skipToBossPhase() {
   bossRig.update(0, { direct: true });
 
   bossPhase = "boss";
-  bossAI = new BossAI(bossRig, () => playerRig, spawnBossGhostFire);
+  bossAI = createBossAI();
   bossAI.reset(getBossHomeX(), BOSS_Y_OFFSET);
 
   if (els.bossHudBlock) {
@@ -335,7 +336,7 @@ function resetBossBattle() {
   }
   if (els.puppetMountBoss) {
     els.puppetMountBoss.hidden = true;
-    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering", "boss-melee-glow");
   }
   bossRig?.setRootTransform(getBossHomeX(), BOSS_Y_OFFSET, 0);
   bossRig?.update(0, { direct: true });
@@ -403,6 +404,7 @@ async function runPlayerDeathSequence() {
 
   running = false;
   cancelAnimationFrame(animId);
+  bgm?.stop();
   enemySwordQi?.clear();
   bossGhostFires?.clear();
   clearUltimateEarthquake();
@@ -443,6 +445,7 @@ async function runBossDeathSequence() {
 
   running = false;
   cancelAnimationFrame(animId);
+  bgm?.stop();
   bossGhostFires?.clear();
   clearUltimateEarthquake();
   staffGlow?.clear?.();
@@ -451,7 +454,7 @@ async function runBossDeathSequence() {
   els.puppetMountPlayer?.classList.remove("combo-active", "ultimate-active");
 
   if (els.puppetMountBoss) {
-    els.puppetMountBoss.classList.remove("boss-entering");
+    els.puppetMountBoss.classList.remove("boss-entering", "boss-melee-glow");
     els.puppetMountBoss.classList.add("boss-defeated");
   }
 
@@ -632,6 +635,14 @@ function getBossHomeX() {
   return getStageWidth() * 0.28;
 }
 
+function createBossAI() {
+  return new BossAI(bossRig, () => playerRig, spawnBossGhostFire, {
+    mountEl: els.puppetMountBoss,
+    getPlayerTorso: (stageRect) => getPlayerTorsoStage(stageRect),
+    onMeleeHit: () => damagePlayer(BOSS_MELEE_DAMAGE),
+  });
+}
+
 function initSpawnPositions() {
   const playerX = 0;
   playerRig?.setRootTransform(playerX, 0, 0);
@@ -754,7 +765,7 @@ function startBossIntro() {
   els.app?.classList.add("boss-intro-shudder");
   if (els.puppetMountBoss) {
     els.puppetMountBoss.hidden = false;
-    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering");
+    els.puppetMountBoss.classList.remove("boss-defeated", "boss-entering", "boss-melee-glow");
     void els.puppetMountBoss.offsetWidth;
     els.puppetMountBoss.classList.add("boss-entering");
   }
@@ -838,7 +849,7 @@ function finishBossIntro() {
   if (els.bossHudBlock) {
     els.bossHudBlock.hidden = false;
   }
-  bossAI = new BossAI(bossRig, () => playerRig, spawnBossGhostFire);
+  bossAI = createBossAI();
   bossAI.reset(getBossHomeX(), BOSS_Y_OFFSET);
   updateDevBossSkipBtn();
 }

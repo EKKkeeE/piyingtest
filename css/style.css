@@ -234,6 +234,15 @@ body {
   filter: saturate(0.55) brightness(0.72);
 }
 
+.boss-mount.boss-melee-glow .puppet-wrapper {
+  animation: boss-melee-glow-pulse 0.28s ease-in-out infinite alternate;
+}
+
+.boss-mount.boss-melee-glow .puppet-part {
+  filter: drop-shadow(0 0 10px rgba(72, 255, 128, 0.72))
+    drop-shadow(0 0 24px rgba(36, 210, 88, 0.5));
+}
+
 .boss-mount.boss-entering {
   animation: boss-enter-stage 3s cubic-bezier(0.18, 0.9, 0.22, 1) both;
 }
@@ -846,6 +855,17 @@ body {
   }
   75% {
     transform: translate3d(-1px, -1px, 0);
+  }
+}
+
+@keyframes boss-melee-glow-pulse {
+  from {
+    filter: drop-shadow(0 0 8px rgba(72, 255, 128, 0.62))
+      drop-shadow(0 0 20px rgba(36, 210, 88, 0.42));
+  }
+  to {
+    filter: drop-shadow(0 0 16px rgba(120, 255, 160, 0.92))
+      drop-shadow(0 0 34px rgba(56, 255, 110, 0.62));
   }
 }
 
