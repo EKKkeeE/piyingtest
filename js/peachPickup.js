@@ -1,0 +1,142 @@
+const PEACH_SRC = "assets/effects/pantao.png";
+const GOURD_SRC = "assets/effects/hulu.png";
+const SPAWN_INTERVAL_SEC = 8;
+const LIFETIME_SEC = 4;
+const HEAL_AMOUNT = 40;
+const HIT_RADIUS = 54;
+
+/**
+ * @param {DOMRect} stageRect
+ */
+function randomStagePoint(stageRect) {
+  const padX = Math.max(96, stageRect.width * 0.14);
+  const padY = Math.max(48, stageRect.height * 0.05);
+  const minY = stageRect.height * 0.56;
+  const maxY = stageRect.height * 0.88;
+  return {
+    x: padX + Math.random() * Math.max(1, stageRect.width - padX * 2),
+    y: minY + Math.random() * Math.max(1, maxY - minY - padY),
+  };
+}
+
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function hitsPickup(item, playerPoints) {
+  if (!playerPoints?.length) return false;
+  return playerPoints.some((point) => dist(item, point) <= HIT_RADIUS);
+}
+
+/**
+ * 蟠桃 / 葫芦拾取：每两轮蟠桃后第三轮刷新葫芦。
+ */
+export class PeachPickupManager {
+  /**
+   * @param {HTMLElement | null} layer
+   */
+  constructor(layer) {
+    this.layer = layer;
+    /** @type {Array<{ el: HTMLElement, x: number, y: number, age: number, kind: "peach" | "gourd" }>} */
+    this.pickups = [];
+    this.spawnTimer = 0;
+    /** 已刷新次数，每第 3 次出葫芦 */
+    this.spawnCount = 0;
+  }
+
+  reset() {
+    this.clear();
+    this.spawnTimer = 0;
+    this.spawnCount = 0;
+  }
+
+  clear() {
+    for (const item of this.pickups) {
+      item.el.remove();
+    }
+    this.pickups = [];
+  }
+
+  /**
+   * @param {DOMRect} stageRect
+   */
+  spawn(stageRect) {
+    if (!this.layer || !stageRect?.width || this.pickups.length > 0) return;
+
+    const kind = this.spawnCount % 3 === 2 ? "gourd" : "peach";
+    this.spawnCount += 1;
+    const point = randomStagePoint(stageRect);
+
+    const el = document.createElement("div");
+    el.className = kind === "gourd" ? "gourd-pickup" : "peach-pickup";
+    el.style.left = `${point.x}px`;
+    el.style.top = `${point.y}px`;
+
+    const body = document.createElement("div");
+    body.className =
+      kind === "gourd" ? "gourd-pickup-body" : "peach-pickup-body";
+
+    if (kind === "peach") {
+      for (let i = 0; i < 3; i += 1) {
+        const plus = document.createElement("span");
+        plus.className = `peach-plus peach-plus-${i + 1}`;
+        plus.textContent = "+";
+        plus.setAttribute("aria-hidden", "true");
+        body.appendChild(plus);
+      }
+    }
+
+    const img = document.createElement("img");
+    img.className =
+      kind === "gourd" ? "gourd-pickup-img" : "peach-pickup-img";
+    img.src = kind === "gourd" ? GOURD_SRC : PEACH_SRC;
+    img.alt = kind === "gourd" ? "葫芦" : "蟠桃";
+    img.draggable = false;
+    body.appendChild(img);
+
+    el.appendChild(body);
+    this.layer.appendChild(el);
+    this.pickups.push({ el, x: point.x, y: point.y, age: 0, kind });
+  }
+
+  /**
+   * @param {number} dt
+   * @param {DOMRect} stageRect
+   * @param {Array<{ x: number, y: number }>} playerPoints
+   * @param {{
+   *   onHeal?: (amount: number) => boolean,
+   *   onGoldenPill?: () => void,
+   * }} handlers
+   */
+  update(dt, stageRect, playerPoints, handlers = {}) {
+    if (!stageRect?.width) return;
+
+    this.spawnTimer += dt;
+    if (this.pickups.length === 0 && this.spawnTimer >= SPAWN_INTERVAL_SEC) {
+      this.spawn(stageRect);
+      this.spawnTimer = 0;
+    }
+
+    const remaining = [];
+    for (const item of this.pickups) {
+      item.age += dt;
+      if (item.age >= LIFETIME_SEC) {
+        item.el.remove();
+        continue;
+      }
+
+      if (hitsPickup(item, playerPoints)) {
+        if (item.kind === "gourd") {
+          handlers.onGoldenPill?.();
+        } else {
+          handlers.onHeal?.(HEAL_AMOUNT);
+        }
+        item.el.remove();
+        continue;
+      }
+
+      remaining.push(item);
+    }
+    this.pickups = remaining;
+  }
+}

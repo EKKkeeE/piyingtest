@@ -6,6 +6,7 @@ import { LayoutCache } from "./layoutCache.js";
 import { createHandDetector, TARGET_DETECT_FPS } from "./handDetect.js";
 import { CurtainAnimation } from "./curtainAnimation.js";
 import { BgmPlayer } from "./bgm.js";
+import { VictoryVoicePlayer } from "./victoryVoice.js";
 import { StaffGlow } from "./staffGlow.js";
 import { StaffComboAttack } from "./staffComboAttack.js";
 import { AttackFramePlayer } from "./attackFramePlayer.js";
@@ -15,6 +16,7 @@ import { EnemySoldier } from "./enemySoldier.js";
 import { EnemySwordQiManager } from "./enemySwordQi.js";
 import { BossAI } from "./bossAI.js";
 import { BossGhostFireManager } from "./bossGhostFire.js";
+import { PeachPickupManager } from "./peachPickup.js";
 import { ResultParticles } from "./resultParticles.js";
 import {
   detectOkSignFromResult,
@@ -103,6 +105,8 @@ const els = {
 let curtainAnim = null;
 /** @type {BgmPlayer | null} */
 let bgm = null;
+/** @type {VictoryVoicePlayer | null} */
+let victoryVoice = null;
 /** @type {StaffGlow | null} */
 let staffGlow = null;
 /** @type {StaffComboAttack | null} */
@@ -149,6 +153,8 @@ let playerDeathSequenceRunning = false;
 let bossAI = null;
 /** @type {BossGhostFireManager | null} */
 let bossGhostFires = null;
+/** @type {PeachPickupManager | null} */
+let peachPickups = null;
 let goldenPills = 0;
 let goldenAttackCount = 0;
 let goldenPillSlots = [];
@@ -379,6 +385,21 @@ function showPlayerDefeatResult() {
   }
 }
 
+function healPlayer(amount) {
+  if (
+    playerHp <= 0 ||
+    playerDeathSequenceRunning ||
+    bossDeathSequenceRunning
+  ) {
+    return false;
+  }
+  const before = playerHp;
+  playerHp = Math.min(PLAYER_MAX_HP, playerHp + amount);
+  if (playerHp === before) return false;
+  updatePlayerHp();
+  return true;
+}
+
 function damagePlayer(amount) {
   if (
     playerHp <= 0 ||
@@ -407,6 +428,7 @@ async function runPlayerDeathSequence() {
   bgm?.stop();
   enemySwordQi?.clear();
   bossGhostFires?.clear();
+  peachPickups?.clear();
   clearUltimateEarthquake();
   staffGlow?.clear?.();
   attackFramePlayer?.hide();
@@ -447,6 +469,7 @@ async function runBossDeathSequence() {
   cancelAnimationFrame(animId);
   bgm?.stop();
   bossGhostFires?.clear();
+  peachPickups?.clear();
   clearUltimateEarthquake();
   staffGlow?.clear?.();
   attackFramePlayer?.hide();
@@ -465,7 +488,13 @@ async function runBossDeathSequence() {
   if (curtainAnim) {
     await curtainAnim.playClose();
   }
+  victoryVoice?.play();
   showPlayerVictoryResult();
+}
+
+function grantGoldenPillFromPickup() {
+  if (goldenPills >= MAX_GOLDEN_PILLS) return;
+  gainGoldenPill();
 }
 
 function gainGoldenPill() {
@@ -808,6 +837,44 @@ function getPlayerTorsoStage(stageRect) {
   );
 }
 
+const FRAME_BODY_POINT_KEYS = [
+  "head",
+  "leftHand",
+  "rightHand",
+  "leftFoot",
+  "rightFoot",
+  "hit",
+  "tip",
+];
+
+function getPlayerBodyStagePoints(stageRect) {
+  if (!stageRect) return [];
+
+  if (currentPlayerHitContext.ultimateActive && ultimateFramePlayer) {
+    return FRAME_BODY_POINT_KEYS.map((key) =>
+      ultimateFramePlayer.getPoint(currentPlayerHitContext.ultimateFrameIndex, key)
+    ).filter(Boolean);
+  }
+
+  if (currentPlayerHitContext.comboActive && attackFramePlayer) {
+    return FRAME_BODY_POINT_KEYS.map((key) =>
+      attackFramePlayer.getPoint(currentPlayerHitContext.comboFrameIndex, key)
+    ).filter(Boolean);
+  }
+
+  if (!playerRig) return [];
+
+  const points = [];
+  for (const partName of Object.keys(playerRig.parts)) {
+    const joints = playerRig.parts[partName]?.joints ?? {};
+    for (const jointKey of Object.keys(joints)) {
+      const point = playerRig.getJointStage(partName, jointKey, stageRect);
+      if (point) points.push(point);
+    }
+  }
+  return points;
+}
+
 function getBossGhostFireSpawns(stageRect) {
   if (!bossRig || !stageRect) return [];
   const slots = [
@@ -886,6 +953,7 @@ function restartBattle() {
     ultimateFrameIndex: 0,
   });
   curtainAnim?.snapOpen();
+  victoryVoice?.stop();
   clearUltimateEarthquake();
   attackFramePlayer?.hide();
   ultimateFramePlayer?.hide();
@@ -970,6 +1038,7 @@ function randomEnemySpawnInterval() {
 
 function resetEnemyBattle() {
   enemySwordQi?.clear();
+  peachPickups?.reset();
   enemySoldiers = [];
   enemySpawnCount = 0;
   enemySpawnTimer = 0;
@@ -999,6 +1068,10 @@ function updateEnemy(dt, stageRect) {
     enemy.update(dt, playerTorso);
   }
   enemySwordQi?.update(dt, playerTorso, damagePlayer);
+  peachPickups?.update(dt, stageRect, getPlayerBodyStagePoints(stageRect), {
+    onHeal: healPlayer,
+    onGoldenPill: grantGoldenPillFromPickup,
+  });
 }
 
 function loop(ts) {
@@ -1044,6 +1117,9 @@ function loop(ts) {
     });
     if (ultimate?.justStarted) {
       consumeGoldenPill();
+      enemySwordQi?.clear();
+      bossGhostFires?.clear();
+      peachPickups?.clear();
     }
     const ultimateActive = !!ultimate?.active;
     const isPeaceSign = ultimateActive
@@ -1204,6 +1280,11 @@ async function initPuppet() {
   } else {
     enemySwordQi.clear();
   }
+  if (!peachPickups) {
+    peachPickups = new PeachPickupManager(els.enemyLayer);
+  } else {
+    peachPickups.reset();
+  }
 
   initSpawnPositions();
 
@@ -1286,6 +1367,7 @@ async function startExperience() {
     }
     if (!bgm) bgm = new BgmPlayer();
     bgm.scheduleStart(3000);
+    if (!victoryVoice) victoryVoice = new VictoryVoicePlayer();
     await curtainAnim?.play();
     ensureEnemySpawned();
     updateDevBossSkipBtn();
@@ -1322,6 +1404,7 @@ window.addEventListener("pagehide", () => {
   cancelAnimationFrame(animId);
   clearUltimateEarthquake();
   bgm?.stop();
+  victoryVoice?.stop();
   stopCamera();
 });
 
