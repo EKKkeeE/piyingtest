@@ -81,6 +81,64 @@ const STAND_DELAY_SEC = 0.45;
 const WALK_SPEED = 85;
 const WALK_SWING_SPEED = 6.5;
 const HIT_ZONE = { w: 250, h: 405 };
+
+function distPointToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = a.x + t * dx;
+  const py = a.y + t * dy;
+  return Math.hypot(p.x - px, p.y - py);
+}
+
+function segmentsCross(a, b, c, d) {
+  const det = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+  if (Math.abs(det) < 1e-9) return false;
+  const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / det;
+  const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / det;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+function segmentIntersectsRect(a, b, minX, minY, maxX, maxY) {
+  if (
+    a.x >= minX &&
+    a.x <= maxX &&
+    a.y >= minY &&
+    a.y <= maxY
+  ) {
+    return true;
+  }
+  if (
+    b.x >= minX &&
+    b.x <= maxX &&
+    b.y >= minY &&
+    b.y <= maxY
+  ) {
+    return true;
+  }
+  const edges = [
+    [
+      { x: minX, y: minY },
+      { x: maxX, y: minY },
+    ],
+    [
+      { x: maxX, y: minY },
+      { x: maxX, y: maxY },
+    ],
+    [
+      { x: maxX, y: maxY },
+      { x: minX, y: maxY },
+    ],
+    [
+      { x: minX, y: maxY },
+      { x: minX, y: minY },
+    ],
+  ];
+  return edges.some(([c, d]) => segmentsCross(a, b, c, d));
+}
 const ANCHOR_REACH_DIST = 6;
 
 /** 吊线挂点：部件贴图局部坐标（头、双臂、双脚） */
@@ -131,11 +189,12 @@ function attackBodyOffset(progress) {
 function pickStandAnchor(stageRect) {
   const padX = Math.max(48, stageRect.width * 0.04);
   const minX = stageRect.width * 0.52 + padX * 0.5;
-  const maxX = stageRect.width - padX;
+  const maxX = stageRect.width * 0.76 - padX * 0.5;
   const minY = stageRect.height * 0.58;
   const maxY = stageRect.height * 0.92;
+  const spanX = Math.max(80, maxX - minX);
   return {
-    x: minX + Math.random() * Math.max(1, maxX - minX),
+    x: minX + Math.random() * spanX,
     y: minY + Math.random() * Math.max(1, maxY - minY),
   };
 }
@@ -348,6 +407,25 @@ export class EnemySoldier {
       Math.abs(point.x - center.x) <= (HIT_ZONE.w * this.scale) / 2 &&
       Math.abs(point.y - center.y) <= (HIT_ZONE.h * this.scale) / 2
     );
+  }
+
+  /**
+   * 金箍棒线段与躯干判定盒相交（沿棍身采样 + 厚度）
+   * @param {{ x: number, y: number }} from
+   * @param {{ x: number, y: number }} to
+   * @param {number} [thickness]
+   * @param {number} [samples]
+   */
+  intersectsStaff(from, to, thickness = 32) {
+    if (!this.isAlive() || !from || !to) return false;
+    const center = this.getCenterStage();
+    const halfW = (HIT_ZONE.w * this.scale) / 2 + thickness;
+    const halfH = (HIT_ZONE.h * this.scale) / 2 + thickness;
+    const minX = center.x - halfW;
+    const maxX = center.x + halfW;
+    const minY = center.y - halfH;
+    const maxY = center.y + halfH;
+    return segmentIntersectsRect(from, to, minX, minY, maxX, maxY);
   }
 
   getSwordDegAt(progress) {

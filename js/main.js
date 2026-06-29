@@ -135,6 +135,7 @@ const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
 const PLAYER_IFRAME_SEC = 0.8;
 const BOSS_HIT_RADIUS = 90;
+const STAFF_HIT_THICKNESS = 56;
 const BOSS_MELEE_DAMAGE = 18;
 const BOSS_Y_OFFSET = 48;
 const BOSS_INTRO_DURATION = 3;
@@ -158,6 +159,8 @@ let peachPickups = null;
 let goldenPills = 0;
 let goldenAttackCount = 0;
 let goldenPillSlots = [];
+let comboHitResolved = false;
+let lastComboCycleId = -1;
 
 function showError(msg) {
   els.errorBox.textContent = msg;
@@ -737,6 +740,27 @@ function bossContainsStagePoint(point, stageRect) {
   return !!point && !!bossPoint && dist(point, bossPoint) <= BOSS_HIT_RADIUS;
 }
 
+function distPointToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = a.x + t * dx;
+  const py = a.y + t * dy;
+  return Math.hypot(p.x - px, p.y - py);
+}
+
+function bossHitByStaff(from, to, stageRect) {
+  const bossPoint = bossStagePoint(stageRect);
+  if (!bossPoint || !from || !to) return false;
+  return (
+    distPointToSegment(bossPoint, from, to) <=
+    BOSS_HIT_RADIUS + STAFF_HIT_THICKNESS
+  );
+}
+
 function minionsCleared() {
   return (
     bossPhase === "minions" &&
@@ -960,6 +984,8 @@ function restartBattle() {
   staffGlow?.clear?.();
   staffCombo?.reset();
   ultimateAttack?.reset();
+  comboHitResolved = false;
+  lastComboCycleId = -1;
   resetGoldenPills();
   resetPlayerHp();
   resetEnemyBattle();
@@ -980,18 +1006,25 @@ function restartBattle() {
   updateDevBossSkipBtn();
 }
 
-function applyPlayerAttackDamage(hitPoints, damage) {
-  const points = Array.isArray(hitPoints) ? hitPoints.filter(Boolean) : [hitPoints].filter(Boolean);
+function applyPlayerAttackDamage(staffSegments, damage) {
+  const segments = Array.isArray(staffSegments) ? staffSegments : [staffSegments];
+  const valid = segments.filter((seg) => seg?.from && seg?.to);
+  if (!valid.length) return 0;
+
   let hitCount = 0;
   for (const enemy of activeEnemies()) {
-    if (points.some((point) => enemy.containsStagePoint(point))) {
-      if (enemy.takeDamage(damage)) {
-        hitCount += 1;
-      }
+    const hit = valid.some((seg) =>
+      enemy.intersectsStaff(seg.from, seg.to, STAFF_HIT_THICKNESS)
+    );
+    if (hit && enemy.takeDamage(damage)) {
+      hitCount += 1;
     }
   }
-  if (isBossAttackable() && points.some((point) => bossContainsStagePoint(point, layoutCache?.stageRect))) {
-    if (damageBoss(damage)) hitCount += 1;
+  if (isBossAttackable()) {
+    const bossHit = valid.some((seg) =>
+      bossHitByStaff(seg.from, seg.to, layoutCache?.stageRect)
+    );
+    if (bossHit && damageBoss(damage)) hitCount += 1;
   }
   return hitCount;
 }
@@ -1178,17 +1211,23 @@ function loop(ts) {
     }
 
     if (comboActive && stageRect) {
+      if ((combo.cycleId ?? 0) !== lastComboCycleId) {
+        comboHitResolved = false;
+        lastComboCycleId = combo.cycleId ?? 0;
+      }
       attackFramePlayer?.show(combo.frameIndex ?? 0, pose.root, stageRect);
-      if (combo?.justImpacted) {
-        const hitCount = applyPlayerAttackDamage(
-          attackFramePlayer?.getHitPoints(combo.frameIndex ?? 0),
-          10
-        );
+      if (!comboHitResolved) {
+        const segments =
+          attackFramePlayer?.getStaffSegments(combo.frameIndex ?? 0) ?? [];
+        const hitCount = applyPlayerAttackDamage(segments, 10);
         if (hitCount > 0) {
+          comboHitResolved = true;
           recordNormalAttackHit(hitCount);
         }
       }
     } else {
+      comboHitResolved = false;
+      lastComboCycleId = -1;
       attackFramePlayer?.hide();
     }
 

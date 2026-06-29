@@ -73,6 +73,13 @@ const FINGER_TO_POINT = {
   thumb: "rightFoot",
 };
 
+/** 握棍端向身体方向延伸，覆盖贴身段 */
+const STAFF_GRIP_EXTEND_PX = 88;
+
+function pointDist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
 export class AttackFramePlayer {
   /**
    * @param {HTMLElement | null} layer
@@ -188,6 +195,56 @@ export class AttackFramePlayer {
 
   getHitPoints(frameIndex = this.frameIndex) {
     return [this.getPoint(frameIndex, "hit"), this.getPoint(frameIndex, "tip")].filter(Boolean);
+  }
+
+  /** @param {number} frameIndex */
+  getStaffEndpoints(frameIndex = this.frameIndex) {
+    const tip = this.getPoint(frameIndex, "tip");
+    const rightHand = this.getPoint(frameIndex, "rightHand");
+    const leftHand = this.getPoint(frameIndex, "leftHand");
+    const hit = this.getPoint(frameIndex, "hit");
+    if (!tip) {
+      return { from: hit, to: hit };
+    }
+
+    const hands = [rightHand, leftHand].filter(Boolean);
+    let from = hit ?? rightHand ?? leftHand;
+    if (hands.length) {
+      from = hands.reduce((grip, hand) =>
+        pointDist(hand, tip) > pointDist(grip, tip) ? hand : grip
+      );
+    }
+    if (!from) {
+      return { from: tip, to: tip };
+    }
+
+    const dx = tip.x - from.x;
+    const dy = tip.y - from.y;
+    const len = Math.hypot(dx, dy) || 1;
+    return {
+      from: {
+        x: from.x - (dx / len) * STAFF_GRIP_EXTEND_PX,
+        y: from.y - (dy / len) * STAFF_GRIP_EXTEND_PX,
+      },
+      to: tip,
+    };
+  }
+
+  /** @param {number} frameIndex */
+  getStaffSegments(frameIndex = this.frameIndex) {
+    const segments = [];
+    const main = this.getStaffEndpoints(frameIndex);
+    if (main.from && main.to) segments.push(main);
+
+    const tip = this.getPoint(frameIndex, "tip");
+    const hit = this.getPoint(frameIndex, "hit");
+    const rightHand = this.getPoint(frameIndex, "rightHand");
+    const leftHand = this.getPoint(frameIndex, "leftHand");
+    if (hit && tip) segments.push({ from: hit, to: tip });
+    if (rightHand && tip) segments.push({ from: rightHand, to: tip });
+    if (leftHand && tip) segments.push({ from: leftHand, to: tip });
+
+    return segments;
   }
 
   /** 受击判定点：与画面上帧动画角色躯干对齐 */

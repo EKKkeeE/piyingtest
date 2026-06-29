@@ -26,6 +26,7 @@ export class StaffComboAttack {
     this.displayFrame = 0;
     this.peaceHold = 0;
     this.impactPlayed = false;
+    this.cycleId = 0;
   }
 
   /**
@@ -56,6 +57,7 @@ export class StaffComboAttack {
     this.elapsed = 0;
     this.displayFrame = 0;
     this.impactPlayed = false;
+    this.cycleId += 1;
   }
 
   _stepActive(dt, peaceSign) {
@@ -85,6 +87,7 @@ export class StaffComboAttack {
           progress: 0,
           glowActive: true,
           justImpacted: false,
+          cycleId: this.cycleId,
         };
       }
       this.active = false;
@@ -98,6 +101,7 @@ export class StaffComboAttack {
       progress,
       glowActive: true,
       justImpacted,
+      cycleId: this.cycleId,
     };
   }
 }
