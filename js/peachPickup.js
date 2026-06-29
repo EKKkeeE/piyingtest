@@ -1,5 +1,4 @@
 const PEACH_SRC = "assets/effects/pantao.png";
-const GOURD_SRC = "assets/effects/hulu.png";
 const SPAWN_INTERVAL_SEC = 8;
 const LIFETIME_SEC = 4;
 const HEAL_AMOUNT = 40;
@@ -28,26 +27,21 @@ function hitsPickup(item, playerPoints) {
   return playerPoints.some((point) => dist(item, point) <= HIT_RADIUS);
 }
 
-/**
- * 蟠桃 / 葫芦拾取：每两轮蟠桃后第三轮刷新葫芦。
- */
+/** 蟠桃拾取：定时刷新，触碰后回血。 */
 export class PeachPickupManager {
   /**
    * @param {HTMLElement | null} layer
    */
   constructor(layer) {
     this.layer = layer;
-    /** @type {Array<{ el: HTMLElement, x: number, y: number, age: number, kind: "peach" | "gourd" }>} */
+    /** @type {Array<{ el: HTMLElement, x: number, y: number, age: number }>} */
     this.pickups = [];
     this.spawnTimer = 0;
-    /** 已刷新次数，每第 3 次出葫芦 */
-    this.spawnCount = 0;
   }
 
   reset() {
     this.clear();
     this.spawnTimer = 0;
-    this.spawnCount = 0;
   }
 
   clear() {
@@ -63,50 +57,41 @@ export class PeachPickupManager {
   spawn(stageRect) {
     if (!this.layer || !stageRect?.width || this.pickups.length > 0) return;
 
-    const kind = this.spawnCount % 3 === 2 ? "gourd" : "peach";
-    this.spawnCount += 1;
     const point = randomStagePoint(stageRect);
 
     const el = document.createElement("div");
-    el.className = kind === "gourd" ? "gourd-pickup" : "peach-pickup";
+    el.className = "peach-pickup";
     el.style.left = `${point.x}px`;
     el.style.top = `${point.y}px`;
 
     const body = document.createElement("div");
-    body.className =
-      kind === "gourd" ? "gourd-pickup-body" : "peach-pickup-body";
+    body.className = "peach-pickup-body";
 
-    if (kind === "peach") {
-      for (let i = 0; i < 3; i += 1) {
-        const plus = document.createElement("span");
-        plus.className = `peach-plus peach-plus-${i + 1}`;
-        plus.textContent = "+";
-        plus.setAttribute("aria-hidden", "true");
-        body.appendChild(plus);
-      }
+    for (let i = 0; i < 3; i += 1) {
+      const plus = document.createElement("span");
+      plus.className = `peach-plus peach-plus-${i + 1}`;
+      plus.textContent = "+";
+      plus.setAttribute("aria-hidden", "true");
+      body.appendChild(plus);
     }
 
     const img = document.createElement("img");
-    img.className =
-      kind === "gourd" ? "gourd-pickup-img" : "peach-pickup-img";
-    img.src = kind === "gourd" ? GOURD_SRC : PEACH_SRC;
-    img.alt = kind === "gourd" ? "葫芦" : "蟠桃";
+    img.className = "peach-pickup-img";
+    img.src = PEACH_SRC;
+    img.alt = "蟠桃";
     img.draggable = false;
     body.appendChild(img);
 
     el.appendChild(body);
     this.layer.appendChild(el);
-    this.pickups.push({ el, x: point.x, y: point.y, age: 0, kind });
+    this.pickups.push({ el, x: point.x, y: point.y, age: 0 });
   }
 
   /**
    * @param {number} dt
    * @param {DOMRect} stageRect
    * @param {Array<{ x: number, y: number }>} playerPoints
-   * @param {{
-   *   onHeal?: (amount: number) => boolean,
-   *   onGoldenPill?: () => void,
-   * }} handlers
+   * @param {{ onHeal?: (amount: number) => boolean }} handlers
    */
   update(dt, stageRect, playerPoints, handlers = {}) {
     if (!stageRect?.width) return;
@@ -126,11 +111,7 @@ export class PeachPickupManager {
       }
 
       if (hitsPickup(item, playerPoints)) {
-        if (item.kind === "gourd") {
-          handlers.onGoldenPill?.();
-        } else {
-          handlers.onHeal?.(HEAL_AMOUNT);
-        }
+        handlers.onHeal?.(HEAL_AMOUNT);
         item.el.remove();
         continue;
       }

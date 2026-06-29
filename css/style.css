@@ -2634,30 +2634,6 @@ body {
   }
 }
 
-.gourd-pickup {
-  position: absolute;
-  width: 96px;
-  height: 96px;
-  transform: translate(-50%, -78%);
-  pointer-events: none;
-  z-index: 2;
-}
-
-.gourd-pickup-body {
-  position: relative;
-  width: 96px;
-  filter: drop-shadow(0 10px 16px rgba(24, 88, 48, 0.32));
-  animation: peach-pickup-bob 1.8s ease-in-out infinite;
-}
-
-.gourd-pickup-img {
-  display: block;
-  width: 96px;
-  height: auto;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
 /* DEV: 上线前删除 */
 .dev-boss-skip-btn {
   position: fixed;

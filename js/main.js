@@ -495,11 +495,6 @@ async function runBossDeathSequence() {
   showPlayerVictoryResult();
 }
 
-function grantGoldenPillFromPickup() {
-  if (goldenPills >= MAX_GOLDEN_PILLS) return;
-  gainGoldenPill();
-}
-
 function gainGoldenPill() {
   if (goldenPills >= MAX_GOLDEN_PILLS) return;
   goldenPills += 1;
@@ -1103,7 +1098,6 @@ function updateEnemy(dt, stageRect) {
   enemySwordQi?.update(dt, playerTorso, damagePlayer);
   peachPickups?.update(dt, stageRect, getPlayerBodyStagePoints(stageRect), {
     onHeal: healPlayer,
-    onGoldenPill: grantGoldenPillFromPickup,
   });
 }
 
