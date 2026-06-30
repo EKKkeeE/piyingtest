@@ -1,7 +1,9 @@
+import { projectileHitsPoints } from "./utils.js";
+
 const DAMAGE = 5;
 const SPEED = 210;
 const HIT_RADIUS = 56;
-const LIFETIME = 3;
+const LIFETIME = 2;
 const LAUNCH_SPEED = 0.55;
 const HOMING = 5.2;
 const FIRE_SRC = "assets/effects/ghost-fire.png";
@@ -116,9 +118,10 @@ export class BossGhostFireManager {
   /**
    * @param {number} dt
    * @param {{ x: number, y: number } | null} playerTarget
+   * @param {Array<{ x: number, y: number }>} playerPoints
    * @param {(amount: number) => boolean} onHit
    */
-  update(dt, playerTarget, onHit) {
+  update(dt, playerTarget, playerPoints, onHit) {
     const next = [];
     for (const p of this.projectiles) {
       p.age += dt;
@@ -142,7 +145,7 @@ export class BossGhostFireManager {
       p.y += p.vy * dt;
       this._applyMotionStyle(p);
 
-      if (playerTarget && Math.hypot(playerTarget.x - p.x, playerTarget.y - p.y) <= HIT_RADIUS) {
+      if (projectileHitsPoints(p, playerPoints, HIT_RADIUS)) {
         onHit(DAMAGE);
         p.el.remove();
         continue;

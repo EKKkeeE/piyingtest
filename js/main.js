@@ -12,7 +12,7 @@ import { StaffComboAttack } from "./staffComboAttack.js";
 import { AttackFramePlayer } from "./attackFramePlayer.js";
 import { UltimateAttack } from "./ultimateAttack.js";
 import { UltimateFramePlayer } from "./ultimateFramePlayer.js";
-import { EnemySoldier } from "./enemySoldier.js";
+import { EnemySoldier, pickDistinctStandAnchors } from "./enemySoldier.js";
 import { EnemySwordQiManager } from "./enemySwordQi.js";
 import { BossAI } from "./bossAI.js";
 import { BossGhostFireManager } from "./bossGhostFire.js";
@@ -84,6 +84,7 @@ const els = {
   ),
   stageInteraction: document.getElementById("stage-interaction"),
   enemyLayer: document.getElementById("enemy-layer"),
+  projectileLayer: document.getElementById("projectile-layer"),
   bossIntroLayer: document.getElementById("boss-intro-layer"),
   goldenPills: document.getElementById("golden-pills"),
   puppetMountPlayer: document.getElementById("puppet-mount-player"),
@@ -124,12 +125,18 @@ let enemySoldiers = [];
 let enemySpawnCount = 0;
 let enemySpawnTimer = 0;
 let enemyNextSpawnInterval = 0;
+let enemySpawnAllowedAt = 0;
+/** @type {Array<{ remaining: number, anchor: { x: number, y: number }, entry: "walk" | "drop" }>} */
+let pendingEnemySpawns = [];
 /** @type {EnemySwordQiManager | null} */
 let enemySwordQi = null;
 const ENEMY_SPAWN_INTERVAL_MIN_SEC = 3;
 const ENEMY_SPAWN_INTERVAL_MAX_SEC = 5;
-const ENEMY_MAX_SPAWNS = 10;
-const ENEMY_MAX_ACTIVE = 3;
+const ENEMY_SPAWN_START_DELAY_MS = 2000;
+const ENEMY_MAX_SPAWNS = 16;
+const ENEMY_MAX_ACTIVE = 4;
+const ENEMIES_PER_SPAWN = 2;
+const ENEMY_SPAWN_STAGGER_SEC = 0.5;
 const PLAYER_MAX_HP = 200;
 const BOSS_MAX_HP = 200;
 const PLAYER_DAMAGE_PER_HIT = 10;
@@ -141,7 +148,7 @@ const BOSS_Y_OFFSET = 48;
 const BOSS_INTRO_DURATION = 3;
 const BOSS_DEATH_ANIMATION_MS = 1400;
 const PLAYER_DEATH_ANIMATION_MS = 1400;
-const ATTACKS_PER_GOLDEN_PILL = 4;
+const ATTACKS_PER_GOLDEN_PILL = 6;
 const MAX_GOLDEN_PILLS = 3;
 let playerHp = PLAYER_MAX_HP;
 let playerIFrame = 0;
@@ -300,6 +307,7 @@ function skipToBossPhase() {
     els.enemyLayer.innerHTML = "";
   }
   enemySoldiers = [];
+  pendingEnemySpawns = [];
   enemySpawnCount = ENEMY_MAX_SPAWNS;
   enemySpawnTimer = 0;
 
@@ -403,6 +411,18 @@ function healPlayer(amount) {
   return true;
 }
 
+function flashPlayerHit(durationSec = 0.2) {
+  if (currentPlayerHitContext.ultimateActive) {
+    ultimateFramePlayer?.flashHit(durationSec);
+    return;
+  }
+  if (currentPlayerHitContext.comboActive) {
+    attackFramePlayer?.flashHit(durationSec);
+    return;
+  }
+  playerRig?.flashHit(durationSec);
+}
+
 function damagePlayer(amount) {
   if (
     playerHp <= 0 ||
@@ -414,7 +434,7 @@ function damagePlayer(amount) {
   }
   playerHp = Math.max(0, playerHp - amount);
   playerIFrame = PLAYER_IFRAME_SEC;
-  playerRig?.flashHit();
+  flashPlayerHit();
   updatePlayerHp();
   if (playerHp <= 0) {
     runPlayerDeathSequence();
@@ -957,7 +977,8 @@ function updateBossBattle(dt, stageRect) {
   bossAI.update(dt, stageRect);
 
   const playerTorso = getPlayerTorsoStage(stageRect);
-  bossGhostFires?.update(dt, playerTorso, damagePlayer);
+  const playerBodyPoints = getPlayerBodyStagePoints(stageRect);
+  bossGhostFires?.update(dt, playerTorso, playerBodyPoints, damagePlayer);
 }
 
 function restartBattle() {
@@ -1006,12 +1027,16 @@ function applyPlayerAttackDamage(staffSegments, damage) {
   const valid = segments.filter((seg) => seg?.from && seg?.to);
   if (!valid.length) return 0;
 
+  const stageRect = layoutCache?.stageRect ?? null;
+  const playerPoint = getPlayerTorsoStage(stageRect);
+  const hitContext = { playerPoint, stageRect };
+
   let hitCount = 0;
   for (const enemy of activeEnemies()) {
     const hit = valid.some((seg) =>
       enemy.intersectsStaff(seg.from, seg.to, STAFF_HIT_THICKNESS)
     );
-    if (hit && enemy.takeDamage(damage)) {
+    if (hit && enemy.takeDamage(damage, hitContext)) {
       hitCount += 1;
     }
   }
@@ -1024,12 +1049,17 @@ function applyPlayerAttackDamage(staffSegments, damage) {
   return hitCount;
 }
 
-function applyUltimateAttackDamage(hitPoint) {
+function applyUltimateAttackDamage(_hitPoint) {
+  const stageRect = layoutCache?.stageRect ?? null;
+  const hitContext = {
+    playerPoint: getPlayerTorsoStage(stageRect),
+    stageRect,
+  };
   for (const enemy of activeEnemies()) {
-    enemy.takeDamage(enemy.containsStagePoint(hitPoint) ? 40 : 20);
+    enemy.takeDamage(40, hitContext);
   }
   if (isBossAttackable()) {
-    damageBoss(bossContainsStagePoint(hitPoint, layoutCache?.stageRect) ? 40 : 20);
+    damageBoss(40);
   }
 }
 
@@ -1037,23 +1067,73 @@ function spawnEnemySwordQi(origin, target) {
   enemySwordQi?.spawn(origin, target);
 }
 
-function spawnEnemy() {
-  if (
-    !els.enemyLayer ||
-    enemySpawnCount >= ENEMY_MAX_SPAWNS ||
-    activeEnemies().length >= ENEMY_MAX_ACTIVE
-  ) {
-    return;
+function spawnSingleEnemy(stageRect, anchor, entry) {
+  if (!els.enemyLayer || !stageRect || enemySpawnCount >= ENEMY_MAX_SPAWNS) return false;
+  if (activeEnemies().length >= ENEMY_MAX_ACTIVE) return false;
+  const enemy = new EnemySoldier(els.enemyLayer, spawnEnemySwordQi);
+  enemy.spawn(stageRect, { anchor, entry });
+  enemySoldiers.push(enemy);
+  enemySpawnCount += 1;
+  return true;
+}
+
+function updatePendingEnemySpawns(dt, stageRect) {
+  if (!pendingEnemySpawns.length || !stageRect?.width) return;
+
+  const remaining = [];
+  for (const pending of pendingEnemySpawns) {
+    pending.remaining -= dt;
+    if (pending.remaining > 0) {
+      remaining.push(pending);
+      continue;
+    }
+    if (spawnSingleEnemy(stageRect, pending.anchor, pending.entry)) {
+      continue;
+    }
+    if (enemySpawnCount < ENEMY_MAX_SPAWNS) {
+      remaining.push({ ...pending, remaining: 0.1 });
+    }
   }
+  pendingEnemySpawns = remaining;
+}
+
+function spawnEnemyWave() {
+  if (!els.enemyLayer || enemySpawnCount >= ENEMY_MAX_SPAWNS) return;
+
   const stageRect =
     layoutCache?.stageRect ??
     els.stageInteraction?.getBoundingClientRect?.() ??
     null;
   if (!stageRect?.width || !stageRect?.height) return;
-  const enemy = new EnemySoldier(els.enemyLayer, spawnEnemySwordQi);
-  enemy.spawn(stageRect);
-  enemySoldiers.push(enemy);
-  enemySpawnCount += 1;
+
+  const slotsAvailable = ENEMY_MAX_ACTIVE - activeEnemies().length - pendingEnemySpawns.length;
+  if (slotsAvailable <= 0) return;
+
+  const spawnCount = Math.min(
+    ENEMIES_PER_SPAWN,
+    ENEMY_MAX_SPAWNS - enemySpawnCount,
+    slotsAvailable
+  );
+  if (spawnCount <= 0) return;
+
+  const occupiedPoints = activeEnemies().flatMap((enemy) =>
+    enemy.getSpawnAvoidPoints()
+  );
+  const anchors = pickDistinctStandAnchors(stageRect, spawnCount, occupiedPoints);
+
+  spawnSingleEnemy(
+    stageRect,
+    anchors[0],
+    Math.random() < 0.5 ? "walk" : "drop"
+  );
+
+  if (spawnCount >= 2 && anchors[1]) {
+    pendingEnemySpawns.push({
+      remaining: ENEMY_SPAWN_STAGGER_SEC,
+      anchor: anchors[1],
+      entry: Math.random() < 0.5 ? "walk" : "drop",
+    });
+  }
 }
 
 function randomEnemySpawnInterval() {
@@ -1064,39 +1144,51 @@ function randomEnemySpawnInterval() {
   );
 }
 
+function canSpawnEnemies() {
+  return performance.now() >= enemySpawnAllowedAt;
+}
+
+function resetEnemySpawnSchedule() {
+  enemySpawnAllowedAt = performance.now() + ENEMY_SPAWN_START_DELAY_MS;
+}
+
 function resetEnemyBattle() {
   enemySwordQi?.clear();
   peachPickups?.reset();
   enemySoldiers = [];
+  pendingEnemySpawns = [];
   enemySpawnCount = 0;
   enemySpawnTimer = 0;
   enemyNextSpawnInterval = randomEnemySpawnInterval();
+  resetEnemySpawnSchedule();
   if (els.enemyLayer) {
     els.enemyLayer.innerHTML = "";
   }
 }
 
 function ensureEnemySpawned() {
-  if (enemySpawnCount > 0) return;
-  spawnEnemy();
+  if (enemySpawnCount > 0 || !canSpawnEnemies()) return;
+  spawnEnemyWave();
 }
 
 function updateEnemy(dt, stageRect) {
   playerIFrame = Math.max(0, playerIFrame - dt);
-  if (enemySpawnCount < ENEMY_MAX_SPAWNS) {
+  updatePendingEnemySpawns(dt, stageRect);
+  if (enemySpawnCount < ENEMY_MAX_SPAWNS && canSpawnEnemies()) {
     enemySpawnTimer += dt;
     if (enemySpawnTimer >= enemyNextSpawnInterval) {
       enemySpawnTimer = 0;
       enemyNextSpawnInterval = randomEnemySpawnInterval();
-      spawnEnemy();
+      spawnEnemyWave();
     }
   }
   const playerTorso = getPlayerTorsoStage(stageRect);
+  const playerBodyPoints = getPlayerBodyStagePoints(stageRect);
   for (const enemy of enemySoldiers) {
-    enemy.update(dt, playerTorso);
+    enemy.update(dt, playerTorso, stageRect);
   }
-  enemySwordQi?.update(dt, playerTorso, damagePlayer);
-  peachPickups?.update(dt, stageRect, getPlayerBodyStagePoints(stageRect), {
+  enemySwordQi?.update(dt, playerBodyPoints, damagePlayer);
+  peachPickups?.update(dt, stageRect, playerBodyPoints, {
     onHeal: healPlayer,
   });
 }
@@ -1304,12 +1396,12 @@ async function initPuppet() {
   layoutCache.refresh(true);
 
   if (!bossGhostFires) {
-    bossGhostFires = new BossGhostFireManager(els.enemyLayer);
+    bossGhostFires = new BossGhostFireManager(els.projectileLayer);
   } else {
     bossGhostFires.clear();
   }
   if (!enemySwordQi) {
-    enemySwordQi = new EnemySwordQiManager(els.enemyLayer);
+    enemySwordQi = new EnemySwordQiManager(els.projectileLayer);
   } else {
     enemySwordQi.clear();
   }

@@ -118,6 +118,7 @@ export class UltimateFramePlayer {
     this._visible = false;
     this._shownFrameIndex = -1;
     this._layoutKey = "";
+    this._hitTimer = 0;
     this._mountFrames();
   }
 
@@ -149,6 +150,20 @@ export class UltimateFramePlayer {
     this._visible = false;
     this._shownFrameIndex = -1;
     this._layoutKey = "";
+  }
+
+  /** @param {number} [durationSec] */
+  flashHit(durationSec = 0.2) {
+    if (!this._visible || this._shownFrameIndex < 0) return;
+    const frame = this.frames[this._shownFrameIndex];
+    if (!frame) return;
+    frame.classList.remove("frame-hit");
+    void frame.offsetWidth;
+    frame.classList.add("frame-hit");
+    clearTimeout(this._hitTimer);
+    this._hitTimer = setTimeout(() => {
+      frame.classList.remove("frame-hit");
+    }, durationSec * 1000);
   }
 
   /**

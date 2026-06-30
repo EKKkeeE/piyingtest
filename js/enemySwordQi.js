@@ -1,3 +1,5 @@
+import { projectileHitsPoints } from "./utils.js";
+
 const DAMAGE = 10;
 const SPEED = 160;
 const HIT_RADIUS = 46;
@@ -64,10 +66,10 @@ export class EnemySwordQiManager {
 
   /**
    * @param {number} dt
-   * @param {{ x: number, y: number } | null} playerTarget
+   * @param {Array<{ x: number, y: number }>} playerPoints
    * @param {(amount: number) => boolean} onHit
    */
-  update(dt, playerTarget, onHit) {
+  update(dt, playerPoints, onHit) {
     const next = [];
     for (const p of this.projectiles) {
       p.age += dt;
@@ -80,10 +82,7 @@ export class EnemySwordQiManager {
       p.y += p.vy * dt;
       p.el.style.transform = `translate(${p.x - QI_PIVOT_X}px, ${p.y - QI_PIVOT_Y}px) rotate(${p.angleDeg}deg)`;
 
-      if (
-        playerTarget &&
-        Math.hypot(playerTarget.x - p.x, playerTarget.y - p.y) <= HIT_RADIUS
-      ) {
+      if (projectileHitsPoints(p, playerPoints, HIT_RADIUS)) {
         onHit(DAMAGE);
         p.el.remove();
         continue;

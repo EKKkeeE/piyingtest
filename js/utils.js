@@ -42,6 +42,18 @@ export function distance(a, b) {
 }
 
 /**
+ * @param {{ x: number, y: number }} projectile
+ * @param {Array<{ x: number, y: number }>} points
+ * @param {number} radius
+ */
+export function projectileHitsPoints(projectile, points, radius) {
+  if (!projectile || !points?.length) return false;
+  return points.some(
+    (point) => Math.hypot(point.x - projectile.x, point.y - projectile.y) <= radius
+  );
+}
+
+/**
  * Exponential smoothing.
  * @param {number} current
  * @param {number} target
