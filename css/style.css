@@ -2016,6 +2016,15 @@ body {
   }
 }
 
+.enemy-flip-wrap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 20px -70px;
+}
+
 .enemy-assembly {
   position: absolute;
   left: 0;

@@ -141,6 +141,10 @@ function segmentIntersectsRect(a, b, minX, minY, maxX, maxY) {
   return edges.some(([c, d]) => segmentsCross(a, b, c, d));
 }
 const ANCHOR_REACH_DIST = 6;
+/** 与 .enemy-flip-wrap 的 transform-origin 一致，用于镜像后坐标换算 */
+const FLIP_ORIGIN_X = 20;
+const FLIP_ORIGIN_Y = -70;
+const FACE_TURN_DEADZONE = 10;
 
 /** 吊线挂点：部件贴图局部坐标（头、双臂、双脚） */
 const MINION_STRING_ATTACH = [
@@ -223,18 +227,36 @@ function pickStandAnchorInZone(stageRect, minX, maxX, minY, maxY) {
   };
 }
 
-/** @param {DOMRect} stageRect @param {number} fromX */
-function pickForwardStandAnchor(stageRect, fromX) {
+/**
+ * @param {DOMRect} stageRect
+ * @param {number} fromX
+ * @param {number} [towardX] 朝孙悟空方向前进时的目标 x；缺省为向左（默认贴图朝向）
+ */
+function pickForwardStandAnchor(stageRect, fromX, towardX) {
   const { minX, maxX, minY, maxY } = getStandAnchorBounds(stageRect);
-  // 小兵面向左侧（玩家方向），向前 = x 减小
-  const forwardMaxX = fromX - 24;
-  if (forwardMaxX > minX + 36) {
-    return pickStandAnchorInZone(stageRect, minX, forwardMaxX, minY, maxY);
+  const moveLeft = towardX == null || towardX < fromX;
+  if (moveLeft) {
+    const forwardMaxX = fromX - 24;
+    if (forwardMaxX > minX + 36) {
+      return pickStandAnchorInZone(stageRect, minX, forwardMaxX, minY, maxY);
+    }
+    return pickStandAnchorInZone(
+      stageRect,
+      minX,
+      Math.max(minX + 36, Math.min(fromX, maxX)),
+      minY,
+      maxY
+    );
+  }
+
+  const forwardMinX = fromX + 24;
+  if (forwardMinX < maxX - 36) {
+    return pickStandAnchorInZone(stageRect, forwardMinX, maxX, minY, maxY);
   }
   return pickStandAnchorInZone(
     stageRect,
-    minX,
-    Math.max(minX + 36, Math.min(fromX, maxX)),
+    Math.min(maxX - 36, Math.max(fromX, minX)),
+    maxX,
     minY,
     maxY
   );
@@ -491,6 +513,8 @@ export class EnemySoldier {
     this._retaliateThenMove = false;
     this.entry = "walk";
     this.dropSpeed = DROP_SPEED;
+    this.flipX = false;
+    this.flipWrap = null;
     this._mount();
   }
 
@@ -500,9 +524,13 @@ export class EnemySoldier {
     this.root.className = "enemy-soldier";
     this.layer.appendChild(this.root);
 
+    this.flipWrap = document.createElement("div");
+    this.flipWrap.className = "enemy-flip-wrap";
+    this.root.appendChild(this.flipWrap);
+
     this.assembly = document.createElement("div");
     this.assembly.className = "enemy-assembly";
-    this.root.appendChild(this.assembly);
+    this.flipWrap.appendChild(this.assembly);
 
     const hp = document.createElement("div");
     hp.className = "enemy-hp";
@@ -572,6 +600,7 @@ export class EnemySoldier {
     this._lastDt = 0;
     this._firstHitReacted = false;
     this._retaliateThenMove = false;
+    this.flipX = false;
     this.active = true;
     clearTimeout(this._hitTimer);
     clearTimeout(this._deathTimer);
@@ -591,8 +620,8 @@ export class EnemySoldier {
     this.standTimer = immediateAttack ? STAND_DELAY_SEC : 0;
     this.attackTimer = ATTACK_INTERVAL_SEC;
     this.root?.classList.remove("enemy-entry-drop");
-    if (this.assembly) {
-      this.assembly.style.transform = "";
+    if (this.flipWrap) {
+      this.flipWrap.style.transform = "";
     }
   }
 
@@ -672,8 +701,20 @@ export class EnemySoldier {
       }
     }
 
+    this._updateFacing(playerPoint);
     this._lastDt = dt;
     this._render();
+  }
+
+  /** @param {{ x: number, y: number } | null | undefined} playerPoint */
+  _updateFacing(playerPoint) {
+    if (!playerPoint) return;
+    const dx = playerPoint.x - this.x;
+    if (dx > FACE_TURN_DEADZONE) {
+      this.flipX = true;
+    } else if (dx < -FACE_TURN_DEADZONE) {
+      this.flipX = false;
+    }
   }
 
   takeDamage(amount, context = {}) {
@@ -731,8 +772,9 @@ export class EnemySoldier {
     if (!this.isAlive()) return;
 
     const rect = stageRect ?? this._stageRect;
+    const playerPoint = _playerPoint ?? this._playerPoint;
     if (rect) {
-      const anchor = pickForwardStandAnchor(rect, this.x);
+      const anchor = pickForwardStandAnchor(rect, this.x, playerPoint?.x);
       this.anchorX = anchor.x;
       this.anchorY = anchor.y;
     }
@@ -803,10 +845,12 @@ export class EnemySoldier {
     const ly = SWORD_TIP[1] - oy;
     const rx = lx * Math.cos(rad) - ly * Math.sin(rad);
     const ry = lx * Math.sin(rad) + ly * Math.cos(rad);
-    return {
-      x: PARTS.armSword.x + ox + rx,
-      y: PARTS.armSword.y + oy + ry,
-    };
+    let x = PARTS.armSword.x + ox + rx;
+    const y = PARTS.armSword.y + oy + ry;
+    if (this.flipX) {
+      x = FLIP_ORIGIN_X * 2 - x;
+    }
+    return { x, y };
   }
 
   getSwordQiOrigin(swordDeg = this.getSwordDegAt(ATTACK_QI_RELEASE)) {
@@ -829,18 +873,24 @@ export class EnemySoldier {
   _assemblyPoint(partName, localX, localY) {
     const spec = PARTS[partName];
     if (!spec) return { x: 0, y: 0 };
+    let x;
+    let y;
     if (!spec.origin) {
-      return { x: spec.x + localX, y: spec.y + localY };
+      x = spec.x + localX;
+      y = spec.y + localY;
+    } else {
+      const [ox, oy] = spec.origin;
+      const deg = this._partRot[partName] ?? 0;
+      const rad = (deg * Math.PI) / 180;
+      const dx = localX - ox;
+      const dy = localY - oy;
+      x = spec.x + ox + dx * Math.cos(rad) - dy * Math.sin(rad);
+      y = spec.y + oy + dx * Math.sin(rad) + dy * Math.cos(rad);
     }
-    const [ox, oy] = spec.origin;
-    const deg = this._partRot[partName] ?? 0;
-    const rad = (deg * Math.PI) / 180;
-    const dx = localX - ox;
-    const dy = localY - oy;
-    return {
-      x: spec.x + ox + dx * Math.cos(rad) - dy * Math.sin(rad),
-      y: spec.y + oy + dx * Math.sin(rad) + dy * Math.cos(rad),
-    };
+    if (this.flipX) {
+      x = FLIP_ORIGIN_X * 2 - x;
+    }
+    return { x, y };
   }
 
   /** @returns {Array<{ x: number, y: number }>} */
@@ -880,9 +930,12 @@ export class EnemySoldier {
     if (this.phase === "attack") {
       const p = Math.min(1, this.attackElapsed / ATTACK_DURATION_SEC);
       const offset = attackBodyOffset(p);
-      // 小兵在舞台右侧面向左，攻击位移 x 取反才是向前（朝玩家）
-      attackOffsetX = -offset.x;
+      // 默认贴图朝左；镜像后朝右，攻击位移方向取反
+      attackOffsetX = this.flipX ? offset.x : -offset.x;
       attackOffsetY = offset.y;
+    }
+    if (this.flipWrap) {
+      this.flipWrap.style.transform = this.flipX ? "scaleX(-1)" : "";
     }
     this.root.style.transform = `translate(${this.x + attackOffsetX}px, ${this.y - this._displayBob + attackOffsetY}px) scale(${this.scale})`;
     this._attackOffsetX = attackOffsetX;
@@ -917,6 +970,7 @@ export class EnemySoldier {
     this._partRot[name] = deg;
     const el = this.parts[name];
     if (!el) return;
-    el.style.transform = `rotate(${deg}deg)`;
+    const applied = this.flipX ? -deg : deg;
+    el.style.transform = `rotate(${applied}deg)`;
   }
 }
